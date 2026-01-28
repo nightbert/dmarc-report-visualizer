@@ -2,7 +2,7 @@ services:
   dmarc-report-visualizer:
     build: .
     ports:
-      - "8090:80"
+      - "8080:80"
     volumes:
       - ./data/inbox:/data/inbox
       - ./data/reports:/data/reports
