@@ -2,6 +2,8 @@
 
 Small PHP container that ingests DMARC XML/ZIP/XML.GZ files from `/data/inbox` and stores reports under `/data/reports/YYYY/MM`. The web UI reads from `/data/reports`.
 
+![Preview Report Listing](preview.png)
+
 ## Usage
 
 Build and run with Docker Compose:
