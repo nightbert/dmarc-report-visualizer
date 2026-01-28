@@ -7,7 +7,7 @@ Small PHP container that ingests DMARC XML/ZIP/XML.GZ files from `/data/inbox` a
 Build and run with Docker Compose:
 
 ```bash
-docker compose up --build
+docker compose up -d --build
 ```
 
 Drop ZIP, XML, or XML.GZ files into `./data/inbox`. The container will:
