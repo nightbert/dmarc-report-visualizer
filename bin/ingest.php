@@ -1,0 +1,343 @@
+<?php
+
+declare(strict_types=1);
+
+require_once __DIR__ . '/../data_paths.php';
+require_once __DIR__ . '/../public/_lib.php';
+
+$inboxDir = resolveDataPath('INBOX_DIR', '/data/inbox', 'inbox');
+$reportsDir = resolveDataPath('REPORTS_DIR', '/data/reports', 'reports');
+$statusFile = resolveDataPath('STATUS_FILE', '/data/status.json', 'status.json');
+
+if (!is_dir($inboxDir)) {
+    mkdir($inboxDir, 0775, true);
+}
+if (!is_dir($reportsDir)) {
+    mkdir($reportsDir, 0775, true);
+}
+
+$entries = @scandir($inboxDir);
+if ($entries === false) {
+    fwrite(STDERR, "Could not read inbox: $inboxDir\n");
+    exit(0);
+}
+
+foreach ($entries as $entry) {
+    if ($entry === '.' || $entry === '..') {
+        continue;
+    }
+
+    $path = $inboxDir . DIRECTORY_SEPARATOR . $entry;
+    if (is_dir($path)) {
+        updateStatus($statusFile, $entry, 'ignored', 100, 'Removed directory from inbox.');
+        removeDir($path);
+        continue;
+    }
+
+    $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+    if ($ext === 'zip') {
+        updateStatus($statusFile, $entry, 'queued', 5, 'ZIP queued.');
+        processZip($path, $reportsDir, $statusFile);
+        continue;
+    }
+
+    if ($ext === 'xml') {
+        updateStatus($statusFile, $entry, 'processing', 40, 'Processing XML.');
+        processXml($path, $reportsDir, basename($path));
+        updateStatus($statusFile, $entry, 'done', 100, 'XML stored.');
+        continue;
+    }
+
+    if ($ext === 'gz') {
+        updateStatus($statusFile, $entry, 'queued', 10, 'GZ queued.');
+        processGz($path, $reportsDir, $statusFile);
+        continue;
+    }
+
+    updateStatus($statusFile, $entry, 'ignored', 100, 'Not a ZIP/XML file.');
+    @unlink($path);
+}
+
+$retentionMonths = reportRetentionMonths();
+if ($retentionMonths > 0) {
+    purgeOldReports($reportsDir, $retentionMonths);
+}
+
+function processZip(string $zipPath, string $reportsDir, string $statusFile): void
+{
+    $tmpDir = rtrim(sys_get_temp_dir(), DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . 'dmarc_' . bin2hex(random_bytes(6));
+    if (!mkdir($tmpDir, 0775, true)) {
+        updateStatus($statusFile, basename($zipPath), 'error', 100, 'Failed to create temp directory.');
+        @unlink($zipPath);
+        return;
+    }
+
+    updateStatus($statusFile, basename($zipPath), 'extracting', 35, 'Extracting ZIP.');
+    $cmd = 'unzip -qq ' . escapeshellarg($zipPath) . ' -d ' . escapeshellarg($tmpDir);
+    exec($cmd, $output, $code);
+
+    if ($code === 0) {
+        $iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($tmpDir));
+        updateStatus($statusFile, basename($zipPath), 'processing', 70, 'Processing XML inside ZIP.');
+        foreach ($iterator as $fileInfo) {
+            if (!$fileInfo->isFile()) {
+                continue;
+            }
+            if (strtolower($fileInfo->getExtension()) !== 'xml') {
+                continue;
+            }
+            $src = $fileInfo->getPathname();
+            $base = $fileInfo->getBasename();
+            processXml($src, $reportsDir, $base);
+        }
+        updateStatus($statusFile, basename($zipPath), 'done', 100, 'ZIP processed.');
+    } else {
+        updateStatus($statusFile, basename($zipPath), 'error', 100, 'Failed to extract ZIP.');
+    }
+
+    removeDir($tmpDir);
+    @unlink($zipPath);
+}
+
+function processXml(string $xmlPath, string $reportsDir, string $preferredName): void
+{
+    $timestamp = extractReportTimestamp($xmlPath);
+    $year = date('Y', $timestamp);
+    $month = date('m', $timestamp);
+
+    $destDir = $reportsDir . DIRECTORY_SEPARATOR . $year . DIRECTORY_SEPARATOR . $month;
+    if (!is_dir($destDir)) {
+        mkdir($destDir, 0775, true);
+    }
+
+    $name = sanitizeFileName($preferredName);
+    if ($name === '') {
+        $name = 'report.xml';
+    }
+
+    $destPath = $destDir . DIRECTORY_SEPARATOR . $name;
+    $destPath = ensureUniquePath($destPath);
+
+    if (!@rename($xmlPath, $destPath)) {
+        if (@copy($xmlPath, $destPath)) {
+            @unlink($xmlPath);
+        }
+    }
+
+    @chmod($destPath, 0644);
+}
+
+function processGz(string $gzPath, string $reportsDir, string $statusFile): void
+{
+    $baseName = basename($gzPath);
+    if (strtolower(substr($baseName, -7)) !== '.xml.gz') {
+        updateStatus($statusFile, $baseName, 'ignored', 100, 'Not an XML.GZ file.');
+        @unlink($gzPath);
+        return;
+    }
+
+    $tmpFile = tempnam(sys_get_temp_dir(), 'dmarc_xml_');
+    if ($tmpFile === false) {
+        updateStatus($statusFile, $baseName, 'error', 100, 'Failed to create temp file.');
+        @unlink($gzPath);
+        return;
+    }
+
+    updateStatus($statusFile, $baseName, 'extracting', 40, 'Decompressing XML.GZ.');
+    $in = @gzopen($gzPath, 'rb');
+    if ($in === false) {
+        updateStatus($statusFile, $baseName, 'error', 100, 'Failed to open GZ.');
+        @unlink($gzPath);
+        @unlink($tmpFile);
+        return;
+    }
+
+    $out = @fopen($tmpFile, 'wb');
+    if ($out === false) {
+        updateStatus($statusFile, $baseName, 'error', 100, 'Failed to write temp file.');
+        gzclose($in);
+        @unlink($gzPath);
+        @unlink($tmpFile);
+        return;
+    }
+
+    while (!gzeof($in)) {
+        $chunk = gzread($in, 8192);
+        if ($chunk === false) {
+            break;
+        }
+        fwrite($out, $chunk);
+    }
+
+    fclose($out);
+    gzclose($in);
+
+    $preferredName = preg_replace('/\\.gz$/i', '', $baseName);
+    updateStatus($statusFile, $baseName, 'processing', 80, 'Processing XML.');
+    processXml($tmpFile, $reportsDir, $preferredName);
+
+    @unlink($tmpFile);
+    @unlink($gzPath);
+    updateStatus($statusFile, $baseName, 'done', 100, 'XML.GZ processed.');
+}
+
+function updateStatus(string $statusFile, string $name, string $stage, int $progress, string $message): void
+{
+    $status = loadStatus($statusFile);
+    $now = time();
+
+    $entry = [
+        'name' => $name,
+        'stage' => $stage,
+        'progress' => max(0, min(100, $progress)),
+        'message' => $message,
+        'updated_at' => $now,
+    ];
+
+    $items = $status['items'] ?? [];
+    $found = false;
+    foreach ($items as $idx => $item) {
+        if (($item['name'] ?? '') === $name) {
+            $items[$idx] = $entry;
+            $found = true;
+            break;
+        }
+    }
+    if (!$found) {
+        $items[] = $entry;
+    }
+
+    $status['items'] = pruneStatusItems($items);
+    $status['updated_at'] = $now;
+    saveStatus($statusFile, $status);
+}
+
+function loadStatus(string $statusFile): array
+{
+    $content = @file_get_contents($statusFile);
+    if ($content === false) {
+        return ['items' => [], 'updated_at' => 0];
+    }
+
+    $data = json_decode($content, true);
+    if (!is_array($data)) {
+        return ['items' => [], 'updated_at' => 0];
+    }
+
+    return $data;
+}
+
+function saveStatus(string $statusFile, array $data): void
+{
+    $dir = dirname($statusFile);
+    if (!is_dir($dir)) {
+        @mkdir($dir, 0775, true);
+    }
+
+    $fp = @fopen($statusFile, 'c+');
+    if ($fp === false) {
+        return;
+    }
+
+    flock($fp, LOCK_EX);
+    ftruncate($fp, 0);
+    rewind($fp);
+    fwrite($fp, json_encode($data, JSON_PRETTY_PRINT));
+    fflush($fp);
+    flock($fp, LOCK_UN);
+    fclose($fp);
+}
+
+function pruneStatusItems(array $items): array
+{
+    $cutoff = time() - 86400;
+    $filtered = [];
+
+    foreach ($items as $item) {
+        $updated = (int)($item['updated_at'] ?? 0);
+        if ($updated < $cutoff) {
+            continue;
+        }
+        $filtered[] = $item;
+    }
+
+    usort($filtered, function (array $a, array $b): int {
+        return ($b['updated_at'] ?? 0) <=> ($a['updated_at'] ?? 0);
+    });
+
+    return array_slice($filtered, 0, 50);
+}
+
+function extractReportTimestamp(string $xmlPath): int
+{
+    $content = @file_get_contents($xmlPath);
+    if ($content === false) {
+        return time();
+    }
+
+    $xml = @simplexml_load_string($content);
+    if ($xml === false) {
+        return filemtime($xmlPath) ?: time();
+    }
+
+    $begin = (string)($xml->report_metadata->date_range->begin ?? '');
+    if (ctype_digit($begin)) {
+        return (int)$begin;
+    }
+
+    $end = (string)($xml->report_metadata->date_range->end ?? '');
+    if (ctype_digit($end)) {
+        return (int)$end;
+    }
+
+    return filemtime($xmlPath) ?: time();
+}
+
+function sanitizeFileName(string $name): string
+{
+    $name = preg_replace('/[^A-Za-z0-9._-]+/', '_', $name ?? '');
+    return trim($name, '._-');
+}
+
+function ensureUniquePath(string $path): string
+{
+    if (!file_exists($path)) {
+        return $path;
+    }
+
+    $dir = dirname($path);
+    $base = pathinfo($path, PATHINFO_FILENAME);
+    $ext = pathinfo($path, PATHINFO_EXTENSION);
+    $counter = 1;
+
+    do {
+        $suffix = '_' . $counter;
+        $name = $base . $suffix . ($ext !== '' ? '.' . $ext : '');
+        $candidate = $dir . DIRECTORY_SEPARATOR . $name;
+        $counter++;
+    } while (file_exists($candidate));
+
+    return $candidate;
+}
+
+function removeDir(string $dir): void
+{
+    if (!is_dir($dir)) {
+        return;
+    }
+
+    $iterator = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator($dir, FilesystemIterator::SKIP_DOTS),
+        RecursiveIteratorIterator::CHILD_FIRST
+    );
+
+    foreach ($iterator as $fileInfo) {
+        if ($fileInfo->isDir()) {
+            @rmdir($fileInfo->getPathname());
+        } else {
+            @unlink($fileInfo->getPathname());
+        }
+    }
+
+    @rmdir($dir);
+}
