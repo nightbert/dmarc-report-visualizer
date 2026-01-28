@@ -463,12 +463,11 @@ $releaseUrl = appReleaseUrl($repoUrl, $version);
       });
     }
 
-    uploadForm.addEventListener('submit', async (event) => {
-      event.preventDefault();
-      const files = fileInput.files;
-      if (!files || files.length === 0) {
-        return;
-      }
+    const maxBatchSize = 5;
+    const uploadQueue = [];
+    let isUploading = false;
+
+    async function uploadBatch(files) {
       const formData = new FormData();
       for (const file of files) {
         formData.append('files[]', file, file.name);
@@ -481,7 +480,6 @@ $releaseUrl = appReleaseUrl($repoUrl, $version);
         });
         const data = await response.json();
         if (response.ok) {
-          fileInput.value = '';
           refreshStatus();
           return;
         }
@@ -489,9 +487,47 @@ $releaseUrl = appReleaseUrl($repoUrl, $version);
       } catch (err) {
         console.warn('Upload failed.', err);
       }
+    }
+
+    async function processUploadQueue() {
+      if (isUploading) {
+        return;
+      }
+      if (!fileInput) {
+        return;
+      }
+      isUploading = true;
+      fileInput.disabled = true;
+      while (uploadQueue.length > 0) {
+        const batch = uploadQueue.splice(0, maxBatchSize);
+        await uploadBatch(batch);
+      }
+      fileInput.value = '';
+      fileInput.disabled = false;
+      isUploading = false;
+    }
+
+    function enqueueUploads(files) {
+      if (!files || files.length === 0) {
+        return;
+      }
+      uploadQueue.push(...files);
+      processUploadQueue();
+    }
+
+    uploadForm.addEventListener('submit', (event) => {
+      event.preventDefault();
+      if (!fileInput) {
+        return;
+      }
+      enqueueUploads(Array.from(fileInput.files || []));
     });
 
-    function triggerUpload() {
+    function triggerUpload(files) {
+      if (files && files.length) {
+        enqueueUploads(Array.from(files));
+        return;
+      }
       if (!uploadForm) {
         return;
       }
@@ -548,14 +584,7 @@ $releaseUrl = appReleaseUrl($repoUrl, $version);
       if (!files || files.length === 0) {
         return;
       }
-      if (fileInput) {
-        const transfer = new DataTransfer();
-        for (const file of files) {
-          transfer.items.add(file);
-        }
-        fileInput.files = transfer.files;
-      }
-      triggerUpload();
+      triggerUpload(files);
     });
 
     loadDismissedStatus();
