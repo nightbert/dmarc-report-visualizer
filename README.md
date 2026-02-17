@@ -12,6 +12,13 @@ Build and run with Docker Compose:
 docker compose up -d --build
 ```
 
+Default build target is `runtime-apache` (compatible with previous setup).
+For a much smaller image you can switch to Alpine CLI runtime:
+
+```bash
+DOCKER_TARGET=runtime-alpine docker compose up -d --build
+```
+
 Drop ZIP, XML, or XML.GZ files into `./data/inbox`. The container will:
 
 - Extract XML files from ZIP archives.

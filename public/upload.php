@@ -4,9 +4,9 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/../data_paths.php';
 
-$inboxDir = preferredDataPath('INBOX_DIR', '/data/inbox');
-$reportsDir = preferredDataPath('REPORTS_DIR', '/data/reports');
-$statusFile = preferredDataPath('STATUS_FILE', '/data/status.json');
+$inboxDir = resolveDataPath('INBOX_DIR', '/data/inbox', 'inbox');
+$reportsDir = resolveDataPath('REPORTS_DIR', '/data/reports', 'reports');
+$statusFile = resolveDataPath('STATUS_FILE', '/data/status.json', 'status.json');
 $existingFingerprints = buildExistingFingerprints($reportsDir);
 
 header('Content-Type: application/json; charset=UTF-8');
@@ -38,7 +38,12 @@ for ($i = 0; $i < count($files['name']); $i++) {
     $error = $files['error'][$i] ?? UPLOAD_ERR_NO_FILE;
 
     if ($error !== UPLOAD_ERR_OK) {
-        $results[] = ['name' => $name, 'status' => 'error', 'message' => 'Upload failed'];
+        $message = uploadErrorMessage($error);
+        $results[] = ['name' => $name, 'status' => 'error', 'message' => $message];
+        if ($name !== '') {
+            $safeName = basename($name);
+            updateStatus($statusFile, $safeName, 'error', 100, $message);
+        }
         continue;
     }
 
@@ -88,17 +93,12 @@ for ($i = 0; $i < count($files['name']); $i++) {
 
 echo json_encode(['results' => $results]);
 
+if (function_exists('fastcgi_finish_request')) {
+    @fastcgi_finish_request();
+}
+
 triggerIngest();
 
-function preferredDataPath(string $envKey, string $default): string
-{
-    $envValue = getenv($envKey);
-    if ($envValue !== false && $envValue !== '') {
-        return $envValue;
-    }
-
-    return $default;
-}
 
 function triggerIngest(): void
 {
@@ -107,15 +107,56 @@ function triggerIngest(): void
         return;
     }
 
-    $phpBinary = PHP_BINARY;
-    $cmd = sprintf('%s %s', escapeshellcmd($phpBinary), escapeshellarg($ingestScript));
-    if (stripos(PHP_OS, 'WIN') === 0) {
-        @exec($cmd);
+    if (runIngestViaExec($ingestScript)) {
         return;
     }
 
-    $cmd .= ' >/dev/null 2>&1 &';
-    @exec($cmd);
+    $inlineIngest = __DIR__ . '/../bin/ingest-inline.php';
+    if (is_file($inlineIngest)) {
+        require $inlineIngest;
+        return;
+    }
+
+    error_log('Upload ingest fallback missing: ' . $inlineIngest);
+}
+
+function runIngestViaExec(string $ingestScript): bool
+{
+    if (!isExecAvailable()) {
+        return false;
+    }
+
+    $phpBinary = PHP_BINARY !== '' ? PHP_BINARY : 'php';
+    $cmd = sprintf('%s %s 2>&1', escapeshellcmd($phpBinary), escapeshellarg($ingestScript));
+    $output = [];
+    $code = 1;
+
+    @exec($cmd, $output, $code);
+    if ($code === 0) {
+        return true;
+    }
+
+    $logTail = '';
+    if (!empty($output)) {
+        $logTail = ' | output: ' . implode("\n", array_slice($output, -6));
+    }
+    error_log('Upload ingest exec failed with code ' . $code . $logTail);
+    return false;
+}
+
+function isExecAvailable(): bool
+{
+    if (!function_exists('exec')) {
+        return false;
+    }
+
+    $disabled = strtolower((string)ini_get('disable_functions'));
+    if ($disabled === '') {
+        return true;
+    }
+
+    $disabledFunctions = array_map('trim', explode(',', $disabled));
+    return !in_array('exec', $disabledFunctions, true);
 }
 
 function reportHasFile(string $reportsDir, string $name): bool
@@ -189,6 +230,9 @@ function extractReportFingerprintsFromFile(string $path, string $name): array
     }
 
     if ($ext === 'zip') {
+        if (!class_exists('ZipArchive')) {
+            return [];
+        }
         $zip = new ZipArchive();
         if ($zip->open($path) !== true) {
             return [];
@@ -278,33 +322,127 @@ function xmlValue(SimpleXMLElement $context, string $path): string
 
 function readGzContent(string $path): string
 {
-    $in = @gzopen($path, 'rb');
-    if ($in === false) {
+    $magic = readFileMagic($path, 64);
+    if ($magic !== '' && str_starts_with($magic, "PK\x03\x04")) {
+        return readXmlFromZip($path);
+    }
+    if ($magic !== '' && isLikelyXml($magic)) {
+        $content = @file_get_contents($path);
+        return is_string($content) ? $content : '';
+    }
+
+    if (function_exists('gzopen')) {
+        $in = @gzopen($path, 'rb');
+        if ($in !== false) {
+            $content = '';
+            while (!gzeof($in)) {
+                $chunk = gzread($in, 8192);
+                if ($chunk === false) {
+                    break;
+                }
+                $content .= $chunk;
+            }
+            gzclose($in);
+            return $content;
+        }
+    }
+
+    $cmd = 'gzip -dc ' . escapeshellarg($path);
+    $output = @shell_exec($cmd);
+    return is_string($output) ? $output : '';
+}
+
+function readFileMagic(string $path, int $bytes): string
+{
+    $fh = @fopen($path, 'rb');
+    if ($fh === false) {
+        return '';
+    }
+    $data = @fread($fh, $bytes);
+    fclose($fh);
+    return is_string($data) ? $data : '';
+}
+
+function isLikelyXml(string $buffer): bool
+{
+    $trimmed = ltrim($buffer);
+    return str_starts_with($trimmed, '<') || str_starts_with($trimmed, '<?xml');
+}
+
+function readXmlFromZip(string $path): string
+{
+    if (!class_exists('ZipArchive')) {
+        return '';
+    }
+    $zip = new ZipArchive();
+    if ($zip->open($path) !== true) {
         return '';
     }
     $content = '';
-    while (!gzeof($in)) {
-        $chunk = gzread($in, 8192);
-        if ($chunk === false) {
+    for ($i = 0; $i < $zip->numFiles; $i++) {
+        $stat = $zip->statIndex($i);
+        if (!is_array($stat)) {
+            continue;
+        }
+        $entryName = $stat['name'] ?? '';
+        if ($entryName === '' || strtolower(pathinfo($entryName, PATHINFO_EXTENSION)) !== 'xml') {
+            continue;
+        }
+        $data = $zip->getFromIndex($i);
+        if ($data !== false) {
+            $content = $data;
             break;
         }
-        $content .= $chunk;
     }
-    gzclose($in);
+    $zip->close();
     return $content;
+}
+
+function uploadErrorMessage(int $code): string
+{
+    return match ($code) {
+        UPLOAD_ERR_INI_SIZE => 'Upload failed: file too large (upload_max_filesize).',
+        UPLOAD_ERR_FORM_SIZE => 'Upload failed: file too large (form limit).',
+        UPLOAD_ERR_PARTIAL => 'Upload failed: partial upload.',
+        UPLOAD_ERR_NO_FILE => 'Upload failed: no file received.',
+        UPLOAD_ERR_NO_TMP_DIR => 'Upload failed: missing temp directory.',
+        UPLOAD_ERR_CANT_WRITE => 'Upload failed: failed to write to disk.',
+        UPLOAD_ERR_EXTENSION => 'Upload failed: blocked by PHP extension.',
+        default => 'Upload failed: unknown error.',
+    };
 }
 
 function updateStatus(string $statusFile, string $name, string $stage, int $progress, string $message): void
 {
-    $status = loadStatus($statusFile);
-    $now = time();
+    $dir = dirname($statusFile);
+    if (!is_dir($dir)) {
+        @mkdir($dir, 0775, true);
+    }
 
+    $fp = @fopen($statusFile, 'c+');
+    if ($fp === false) {
+        return;
+    }
+
+    flock($fp, LOCK_EX);
+    $raw = stream_get_contents($fp);
+    $status = [];
+    if (is_string($raw) && $raw !== '') {
+        $decoded = json_decode($raw, true);
+        if (is_array($decoded)) {
+            $status = $decoded;
+        }
+    }
+
+    $now = time();
+    $sequence = max(0, (int)($status['sequence'] ?? 0)) + 1;
     $entry = [
         'name' => $name,
         'stage' => $stage,
         'progress' => max(0, min(100, $progress)),
         'message' => $message,
         'updated_at' => $now,
+        'sequence' => $sequence,
     ];
 
     $items = $status['items'] ?? [];
@@ -322,40 +460,11 @@ function updateStatus(string $statusFile, string $name, string $stage, int $prog
 
     $status['items'] = pruneStatusItems($items);
     $status['updated_at'] = $now;
-    saveStatus($statusFile, $status);
-}
+    $status['sequence'] = $sequence;
 
-function loadStatus(string $statusFile): array
-{
-    $content = @file_get_contents($statusFile);
-    if ($content === false) {
-        return ['items' => [], 'updated_at' => 0];
-    }
-
-    $data = json_decode($content, true);
-    if (!is_array($data)) {
-        return ['items' => [], 'updated_at' => 0];
-    }
-
-    return $data;
-}
-
-function saveStatus(string $statusFile, array $data): void
-{
-    $dir = dirname($statusFile);
-    if (!is_dir($dir)) {
-        @mkdir($dir, 0775, true);
-    }
-
-    $fp = @fopen($statusFile, 'c+');
-    if ($fp === false) {
-        return;
-    }
-
-    flock($fp, LOCK_EX);
     ftruncate($fp, 0);
     rewind($fp);
-    fwrite($fp, json_encode($data, JSON_PRETTY_PRINT));
+    fwrite($fp, json_encode($status, JSON_PRETTY_PRINT));
     fflush($fp);
     flock($fp, LOCK_UN);
     fclose($fp);

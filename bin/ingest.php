@@ -83,12 +83,16 @@ function processZip(string $zipPath, string $reportsDir, string $statusFile): vo
             if (!$fileInfo->isFile()) {
                 continue;
             }
-            if (strtolower($fileInfo->getExtension()) !== 'xml') {
-                continue;
-            }
             $src = $fileInfo->getPathname();
             $base = $fileInfo->getBasename();
-            processXml($src, $reportsDir, $base);
+            $ext = strtolower($fileInfo->getExtension());
+            if ($ext === 'xml') {
+                processXml($src, $reportsDir, $base);
+                continue;
+            }
+            if ($ext === 'gz' && str_ends_with(strtolower($base), '.xml.gz')) {
+                processGz($src, $reportsDir, $statusFile);
+            }
         }
         updateStatus($statusFile, basename($zipPath), 'done', 100, 'ZIP processed.');
     } else {
@@ -136,6 +140,20 @@ function processGz(string $gzPath, string $reportsDir, string $statusFile): void
         return;
     }
 
+    $magic = readFileMagic($gzPath, 64);
+    if ($magic !== '' && str_starts_with($magic, "PK\x03\x04")) {
+        updateStatus($statusFile, $baseName, 'queued', 10, 'ZIP detected in XML.GZ.');
+        processZip($gzPath, $reportsDir, $statusFile);
+        return;
+    }
+    if ($magic !== '' && isLikelyXml($magic)) {
+        updateStatus($statusFile, $baseName, 'processing', 40, 'XML detected in XML.GZ.');
+        processXml($gzPath, $reportsDir, preg_replace('/\\.gz$/i', '', $baseName));
+        @unlink($gzPath);
+        updateStatus($statusFile, $baseName, 'done', 100, 'XML stored.');
+        return;
+    }
+
     $tmpFile = tempnam(sys_get_temp_dir(), 'dmarc_xml_');
     if ($tmpFile === false) {
         updateStatus($statusFile, $baseName, 'error', 100, 'Failed to create temp file.');
@@ -144,33 +162,43 @@ function processGz(string $gzPath, string $reportsDir, string $statusFile): void
     }
 
     updateStatus($statusFile, $baseName, 'extracting', 40, 'Decompressing XML.GZ.');
-    $in = @gzopen($gzPath, 'rb');
-    if ($in === false) {
-        updateStatus($statusFile, $baseName, 'error', 100, 'Failed to open GZ.');
-        @unlink($gzPath);
-        @unlink($tmpFile);
-        return;
-    }
+    $decompressed = false;
+    if (function_exists('gzopen')) {
+        $in = @gzopen($gzPath, 'rb');
+        if ($in !== false) {
+            $out = @fopen($tmpFile, 'wb');
+            if ($out === false) {
+                updateStatus($statusFile, $baseName, 'error', 100, 'Failed to write temp file.');
+                gzclose($in);
+                @unlink($gzPath);
+                @unlink($tmpFile);
+                return;
+            }
 
-    $out = @fopen($tmpFile, 'wb');
-    if ($out === false) {
-        updateStatus($statusFile, $baseName, 'error', 100, 'Failed to write temp file.');
-        gzclose($in);
-        @unlink($gzPath);
-        @unlink($tmpFile);
-        return;
-    }
+            while (!gzeof($in)) {
+                $chunk = gzread($in, 8192);
+                if ($chunk === false) {
+                    break;
+                }
+                fwrite($out, $chunk);
+            }
 
-    while (!gzeof($in)) {
-        $chunk = gzread($in, 8192);
-        if ($chunk === false) {
-            break;
+            fclose($out);
+            gzclose($in);
+            $decompressed = true;
         }
-        fwrite($out, $chunk);
     }
 
-    fclose($out);
-    gzclose($in);
+    if (!$decompressed) {
+        $cmd = 'gzip -dc ' . escapeshellarg($gzPath) . ' > ' . escapeshellarg($tmpFile);
+        exec($cmd, $output, $code);
+        if ($code !== 0) {
+            updateStatus($statusFile, $baseName, 'error', 100, 'Failed to open GZ.');
+            @unlink($gzPath);
+            @unlink($tmpFile);
+            return;
+        }
+    }
 
     $preferredName = preg_replace('/\\.gz$/i', '', $baseName);
     updateStatus($statusFile, $baseName, 'processing', 80, 'Processing XML.');
@@ -181,17 +209,54 @@ function processGz(string $gzPath, string $reportsDir, string $statusFile): void
     updateStatus($statusFile, $baseName, 'done', 100, 'XML.GZ processed.');
 }
 
+function readFileMagic(string $path, int $bytes): string
+{
+    $fh = @fopen($path, 'rb');
+    if ($fh === false) {
+        return '';
+    }
+    $data = @fread($fh, $bytes);
+    fclose($fh);
+    return is_string($data) ? $data : '';
+}
+
+function isLikelyXml(string $buffer): bool
+{
+    $trimmed = ltrim($buffer);
+    return str_starts_with($trimmed, '<') || str_starts_with($trimmed, '<?xml');
+}
+
 function updateStatus(string $statusFile, string $name, string $stage, int $progress, string $message): void
 {
-    $status = loadStatus($statusFile);
-    $now = time();
+    $dir = dirname($statusFile);
+    if (!is_dir($dir)) {
+        @mkdir($dir, 0775, true);
+    }
 
+    $fp = @fopen($statusFile, 'c+');
+    if ($fp === false) {
+        return;
+    }
+
+    flock($fp, LOCK_EX);
+    $raw = stream_get_contents($fp);
+    $status = [];
+    if (is_string($raw) && $raw !== '') {
+        $decoded = json_decode($raw, true);
+        if (is_array($decoded)) {
+            $status = $decoded;
+        }
+    }
+
+    $now = time();
+    $sequence = max(0, (int)($status['sequence'] ?? 0)) + 1;
     $entry = [
         'name' => $name,
         'stage' => $stage,
         'progress' => max(0, min(100, $progress)),
         'message' => $message,
         'updated_at' => $now,
+        'sequence' => $sequence,
     ];
 
     $items = $status['items'] ?? [];
@@ -209,40 +274,11 @@ function updateStatus(string $statusFile, string $name, string $stage, int $prog
 
     $status['items'] = pruneStatusItems($items);
     $status['updated_at'] = $now;
-    saveStatus($statusFile, $status);
-}
+    $status['sequence'] = $sequence;
 
-function loadStatus(string $statusFile): array
-{
-    $content = @file_get_contents($statusFile);
-    if ($content === false) {
-        return ['items' => [], 'updated_at' => 0];
-    }
-
-    $data = json_decode($content, true);
-    if (!is_array($data)) {
-        return ['items' => [], 'updated_at' => 0];
-    }
-
-    return $data;
-}
-
-function saveStatus(string $statusFile, array $data): void
-{
-    $dir = dirname($statusFile);
-    if (!is_dir($dir)) {
-        @mkdir($dir, 0775, true);
-    }
-
-    $fp = @fopen($statusFile, 'c+');
-    if ($fp === false) {
-        return;
-    }
-
-    flock($fp, LOCK_EX);
     ftruncate($fp, 0);
     rewind($fp);
-    fwrite($fp, json_encode($data, JSON_PRETTY_PRINT));
+    fwrite($fp, json_encode($status, JSON_PRETTY_PRINT));
     fflush($fp);
     flock($fp, LOCK_UN);
     fclose($fp);

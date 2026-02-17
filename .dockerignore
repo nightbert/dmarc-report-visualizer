@@ -1,0 +1,8 @@
+.git
+.gitignore
+README.md
+preview.png
+docker-compose.yml
+data/reports
+data/inbox
+data/status.json

@@ -66,6 +66,62 @@ function getReportFiles(): array
     return $location['files'] ?? [];
 }
 
+function reportSummariesData(): array
+{
+    $location = detectReportLocation();
+    $root = $location['root'] ?? '';
+    $files = $location['files'] ?? [];
+    $summaries = [];
+    $years = [];
+    $months = [];
+    $orgs = [];
+    $tokenIndex = [];
+
+    foreach ($files as $file) {
+        $summary = parseReportSummary($file);
+        $summary['token'] = buildFileToken($root, $file);
+        $summary['year'] = $summary['timestamp'] ? date('Y', $summary['timestamp']) : '';
+        $summary['month'] = $summary['timestamp'] ? date('m', $summary['timestamp']) : '';
+        $summaries[] = $summary;
+        if ($summary['token'] !== '') {
+            $tokenIndex[basename($summary['path'])] = $summary['token'];
+        }
+
+        if ($summary['year'] !== '') {
+            $years[$summary['year']] = true;
+        }
+        if ($summary['month'] !== '') {
+            $months[$summary['month']] = true;
+        }
+        if ($summary['org'] !== '') {
+            $orgs[$summary['org']] = true;
+        }
+    }
+
+    usort($summaries, function (array $a, array $b): int {
+        return ($b['timestamp'] ?? 0) <=> ($a['timestamp'] ?? 0);
+    });
+
+    $yearOptions = array_keys($years);
+    $monthOptions = array_keys($months);
+    $orgOptions = array_keys($orgs);
+    sort($yearOptions);
+    sort($monthOptions);
+    usort($orgOptions, static function (string $a, string $b): int {
+        return strcasecmp($a, $b);
+    });
+
+    return [
+        'root' => $root,
+        'summaries' => $summaries,
+        'total' => count($summaries),
+        'year_options' => $yearOptions,
+        'month_options' => $monthOptions,
+        'org_options' => $orgOptions,
+        'token_index' => $tokenIndex,
+    ];
+}
+
 function normalizePath(string $path): string
 {
     $real = realpath($path);

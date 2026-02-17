@@ -4,46 +4,13 @@ declare(strict_types=1);
 
 require __DIR__ . '/_lib.php';
 
-$root = reportsRoot();
-$files = getReportFiles();
-$summaries = [];
-$years = [];
-$months = [];
-$orgs = [];
-$tokenIndex = [];
-
-foreach ($files as $file) {
-    $summary = parseReportSummary($file);
-    $summary['token'] = buildFileToken($root, $file);
-    $summary['year'] = $summary['timestamp'] ? date('Y', $summary['timestamp']) : '';
-    $summary['month'] = $summary['timestamp'] ? date('m', $summary['timestamp']) : '';
-    $summaries[] = $summary;
-    if ($summary['token'] !== '') {
-        $tokenIndex[basename($summary['path'])] = $summary['token'];
-    }
-
-    if ($summary['year'] !== '') {
-        $years[$summary['year']] = true;
-    }
-    if ($summary['month'] !== '') {
-        $months[$summary['month']] = true;
-    }
-    if ($summary['org'] !== '') {
-        $orgs[$summary['org']] = true;
-    }
-}
-
-usort($summaries, function (array $a, array $b): int {
-    return ($b['timestamp'] ?? 0) <=> ($a['timestamp'] ?? 0);
-});
-
-$total = count($summaries);
-$yearOptions = array_keys($years);
-$monthOptions = array_keys($months);
-$orgOptions = array_keys($orgs);
-sort($yearOptions);
-sort($monthOptions);
-sort($orgOptions);
+$reportData = reportSummariesData();
+$summaries = $reportData['summaries'] ?? [];
+$total = (int)($reportData['total'] ?? 0);
+$yearOptions = $reportData['year_options'] ?? [];
+$monthOptions = $reportData['month_options'] ?? [];
+$orgOptions = $reportData['org_options'] ?? [];
+$tokenIndex = $reportData['token_index'] ?? [];
 $repoUrl = appRepoUrl();
 $version = appVersion();
 $releaseUrl = appReleaseUrl($repoUrl, $version);
@@ -62,7 +29,7 @@ $releaseUrl = appReleaseUrl($repoUrl, $version);
   <header class="hero">
     <div class="hero-content">
       <h1>DMARC Report Visualizer</h1>
-      <div class="stat">Total reports: <strong><?= $total ?></strong></div>
+      <div class="stat">Total reports: <strong id="total-reports"><?= $total ?></strong></div>
     </div>
   </header>
 
@@ -199,16 +166,31 @@ $releaseUrl = appReleaseUrl($repoUrl, $version);
   </footer>
 
   <script>
-    const reportTokenIndex = <?= json_encode($tokenIndex, JSON_UNESCAPED_SLASHES) ?>;
+    let reportTokenIndex = <?= json_encode($tokenIndex, JSON_UNESCAPED_SLASHES) ?>;
     const statusList = document.getElementById('status-list');
     const uploadForm = document.getElementById('upload-form');
     const fileInput = document.getElementById('file-input');
     const statusReload = document.getElementById('status-reload');
     const dropzone = document.getElementById('dropzone');
     const dragOverlay = document.getElementById('drag-overlay');
+    const totalReports = document.getElementById('total-reports');
     const dismissedKey = 'dismissedFetchStatus';
     const dismissedStatus = new Set();
     const seenStatus = new Set();
+    let statusPollInFlight = false;
+    let reportsPollInFlight = false;
+    let latestStatusSequence = 0;
+    let latestStatusUpdatedAt = 0;
+    let doneSignature = '';
+
+    function escapeHtml(value) {
+      return String(value || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
 
     function loadDismissedStatus() {
       try {
@@ -237,7 +219,19 @@ $releaseUrl = appReleaseUrl($repoUrl, $version);
       return String(item && item.name ? item.name : 'unknown');
     }
 
+    function itemVersion(item) {
+      const sequence = Number(item && item.sequence ? item.sequence : 0);
+      if (Number.isFinite(sequence) && sequence > 0) {
+        return sequence;
+      }
+      const updatedAt = Number(item && item.updated_at ? item.updated_at : 0);
+      return Number.isFinite(updatedAt) ? updatedAt : 0;
+    }
+
     function renderStatus(items) {
+      if (!statusList) {
+        return;
+      }
       const visibleItems = (items || []).filter((item) => !dismissedStatus.has(statusKey(item)));
       if (!visibleItems || visibleItems.length === 0) {
         statusList.innerHTML = '<div class="muted">No activity yet.</div>';
@@ -259,12 +253,15 @@ $releaseUrl = appReleaseUrl($repoUrl, $version);
         .map((entry) => entry.item);
 
       statusList.innerHTML = orderedItems.map((item, index) => {
-        const name = item.name || 'unknown';
-        const stage = item.stage || '';
-        const message = item.message || '';
-        const progress = Math.max(0, Math.min(100, item.progress || 0));
+        const name = String(item && item.name ? item.name : 'unknown');
+        const stage = String(item && item.stage ? item.stage : '');
+        const message = String(item && item.message ? item.message : '');
+        const rawProgress = Number(item && item.progress ? item.progress : 0);
+        const progress = Math.max(0, Math.min(100, Number.isFinite(rawProgress) ? rawProgress : 0));
         const key = statusKey(item);
-        const viewToken = reportTokenIndex[name];
+        const viewToken = reportTokenIndex && Object.prototype.hasOwnProperty.call(reportTokenIndex, name)
+          ? reportTokenIndex[name]
+          : '';
         const viewLink = stage === 'done' && viewToken
           ? `<a class="status-link" href="/report.php?f=${encodeURIComponent(viewToken)}">View</a>`
           : '';
@@ -273,16 +270,16 @@ $releaseUrl = appReleaseUrl($repoUrl, $version);
         const statusClass = isDone ? 'status-item success' : (isError ? 'status-item danger' : 'status-item info');
         const animationClass = seenStatus.has(key) ? '' : ' status-item--new';
         return `
-          <div class="${statusClass}${animationClass}" style="animation-delay:${index * 40}ms" data-status-key="${key}">
+          <div class="${statusClass}${animationClass}" style="animation-delay:${index * 40}ms" data-status-key="${escapeHtml(key)}">
             <button type="button" class="status-dismiss" aria-label="Dismiss item" title="Dismiss">×</button>
             <div class="status-header">
-              <span class="status-name" title="${name}">${name}</span>
-              <span class="status-stage">${stage} ${viewLink}</span>
+              <span class="status-name" title="${escapeHtml(name)}">${escapeHtml(name)}</span>
+              <span class="status-stage">${escapeHtml(stage)} ${viewLink}</span>
             </div>
             <div class="progress">
               <div class="progress-bar" style="width:${progress}%"></div>
             </div>
-            <div class="status-message">${message}</div>
+            <div class="status-message">${escapeHtml(message)}</div>
           </div>
         `;
       }).join('');
@@ -342,6 +339,109 @@ $releaseUrl = appReleaseUrl($repoUrl, $version);
       });
     }
 
+    function syncSelectOptions(select, values, options = {}) {
+      if (!select) {
+        return;
+      }
+      const sortAlpha = !!options.sortAlpha;
+      const current = select.value;
+      const normalizedValues = (values || [])
+        .map((value) => String(value || ''))
+        .filter((value) => value !== '');
+      if (sortAlpha) {
+        normalizedValues.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+      }
+
+      select.innerHTML = '';
+      const allOption = document.createElement('option');
+      allOption.value = '';
+      allOption.textContent = 'All';
+      select.appendChild(allOption);
+
+      normalizedValues.forEach((stringValue) => {
+        const option = document.createElement('option');
+        option.value = stringValue;
+        option.textContent = stringValue;
+        select.appendChild(option);
+      });
+
+      const hasCurrent = Array.from(select.options).some((option) => option.value === current);
+      if (hasCurrent) {
+        select.value = current;
+      } else {
+        select.value = '';
+      }
+    }
+
+    function renderReports(data) {
+      if (!data || typeof data !== 'object') {
+        return;
+      }
+
+      const nextTokenIndex = data.token_index && typeof data.token_index === 'object'
+        ? data.token_index
+        : {};
+      reportTokenIndex = nextTokenIndex;
+
+      if (totalReports) {
+        totalReports.textContent = String(Number(data.total || 0));
+      }
+
+      if (filtersReady) {
+        syncSelectOptions(filterYear, data.year_options || []);
+        syncSelectOptions(filterMonth, data.month_options || []);
+        syncSelectOptions(filterOrg, data.org_options || [], { sortAlpha: true });
+      }
+
+      const tableBody = document.querySelector('.reports tbody');
+      const summaries = Array.isArray(data.summaries) ? data.summaries : [];
+      if (!tableBody) {
+        if (summaries.length > 0) {
+          window.location.reload();
+        }
+        return;
+      }
+
+      tableBody.innerHTML = summaries.map((summary) => {
+        const year = String(summary && summary.year ? summary.year : '');
+        const month = String(summary && summary.month ? summary.month : '');
+        const org = String(summary && summary.org ? summary.org : '');
+        const token = String(summary && summary.token ? summary.token : '');
+        const timestamp = Number(summary && summary.timestamp ? summary.timestamp : 0);
+        const fallbackDate = timestamp > 0 ? new Date(timestamp * 1000).toISOString().slice(0, 10) : '';
+        const dateRange = String(summary && summary.date_range ? summary.date_range : fallbackDate);
+        const domain = String(summary && summary.domain ? summary.domain : '');
+        const reportId = String(summary && summary.report_id ? summary.report_id : '');
+        const records = Number(summary && summary.records ? summary.records : 0);
+        const safeRecords = Number.isFinite(records) ? records : 0;
+        const action = token !== ''
+          ? `<a href="/report.php?f=${encodeURIComponent(token)}">View</a>`
+          : '<span class="muted">Unavailable</span>';
+
+        return `
+          <tr data-year="${escapeHtml(year)}" data-month="${escapeHtml(month)}" data-org="${escapeHtml(org)}" data-token="${escapeHtml(token)}">
+            <td>${escapeHtml(dateRange)}</td>
+            <td>${escapeHtml(org)}</td>
+            <td>${escapeHtml(domain)}</td>
+            <td>${escapeHtml(reportId)}</td>
+            <td>${safeRecords}</td>
+            <td>${action}</td>
+          </tr>
+        `;
+      }).join('');
+
+      bindDeleteButtons();
+      applyFilters();
+    }
+
+    function buildDoneSignature(items) {
+      return (items || [])
+        .filter((item) => item && item.stage === 'done')
+        .map((item) => `${item.name || 'unknown'}:${itemVersion(item)}`)
+        .sort()
+        .join('|');
+    }
+
     function applyFilters() {
       if (!filtersReady) {
         return;
@@ -387,6 +487,82 @@ $releaseUrl = appReleaseUrl($repoUrl, $version);
       }
     }
 
+    async function clearCompletedStatus() {
+      try {
+        await fetch('/clear-status.php', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          cache: 'no-store',
+          body: JSON.stringify({ mode: 'completed' }),
+        });
+      } catch (err) {
+        // ignore transient failures
+      }
+    }
+
+    async function refreshReports() {
+      if (reportsPollInFlight) {
+        return;
+      }
+      reportsPollInFlight = true;
+      try {
+        const response = await fetch(`/reports.php?t=${Date.now()}`, { cache: 'no-store' });
+        if (!response.ok) {
+          return;
+        }
+        const data = await response.json();
+        renderReports(data);
+      } catch (err) {
+        // ignore transient failures
+      } finally {
+        reportsPollInFlight = false;
+      }
+    }
+
+    async function refreshStatus() {
+      if (statusPollInFlight) {
+        return;
+      }
+      statusPollInFlight = true;
+      try {
+        const response = await fetch(`/status.php?t=${Date.now()}`, { cache: 'no-store' });
+        if (!response.ok) {
+          return;
+        }
+        const data = await response.json();
+        const sequence = Number(data && data.sequence ? data.sequence : 0);
+        const updatedAt = Number(data && data.updated_at ? data.updated_at : 0);
+
+        if (Number.isFinite(sequence) && sequence > 0) {
+          if (sequence < latestStatusSequence) {
+            return;
+          }
+          latestStatusSequence = sequence;
+        } else if (Number.isFinite(updatedAt) && updatedAt < latestStatusUpdatedAt) {
+          return;
+        }
+
+        if (Number.isFinite(updatedAt)) {
+          latestStatusUpdatedAt = Math.max(latestStatusUpdatedAt, updatedAt);
+        }
+
+        const items = Array.isArray(data.items) ? data.items : [];
+        renderStatus(items);
+
+        const nextDoneSignature = buildDoneSignature(items);
+        if (nextDoneSignature !== doneSignature) {
+          doneSignature = nextDoneSignature;
+          if (doneSignature !== '') {
+            refreshReports();
+          }
+        }
+      } catch (err) {
+        // ignore transient failures
+      } finally {
+        statusPollInFlight = false;
+      }
+    }
+
     if (statusList) {
       statusList.addEventListener('click', (event) => {
         const button = event.target.closest('.status-dismiss');
@@ -401,6 +577,9 @@ $releaseUrl = appReleaseUrl($repoUrl, $version);
             persistDismissedStatus();
           }
           item.remove();
+          if (!statusList.querySelector('.status-item')) {
+            statusList.innerHTML = '<div class="muted">No activity yet.</div>';
+          }
         }
       });
     }
@@ -430,21 +609,9 @@ $releaseUrl = appReleaseUrl($repoUrl, $version);
       });
     }
 
-    async function refreshStatus() {
-      try {
-        const response = await fetch('/status.php', { cache: 'no-store' });
-        if (!response.ok) {
-          return;
-        }
-        const data = await response.json();
-        renderStatus(data.items || []);
-      } catch (err) {
-        // ignore transient failures
-      }
-    }
-
     if (statusReload) {
-      statusReload.addEventListener('click', () => {
+      statusReload.addEventListener('click', async () => {
+        await clearCompletedStatus();
         window.location.reload();
       });
     }
@@ -480,7 +647,14 @@ $releaseUrl = appReleaseUrl($repoUrl, $version);
         });
         const data = await response.json();
         if (response.ok) {
+          const results = Array.isArray(data && data.results) ? data.results : [];
+          const hasSuccessfulUpload = results.some((item) => item && item.status === 'ok');
           refreshStatus();
+          if (hasSuccessfulUpload) {
+            refreshReports();
+            window.setTimeout(refreshReports, 1500);
+            window.setTimeout(refreshReports, 6000);
+          }
           return;
         }
         console.warn('Upload failed.', data && data.error ? data.error : '');
@@ -515,13 +689,15 @@ $releaseUrl = appReleaseUrl($repoUrl, $version);
       processUploadQueue();
     }
 
-    uploadForm.addEventListener('submit', (event) => {
-      event.preventDefault();
-      if (!fileInput) {
-        return;
-      }
-      enqueueUploads(Array.from(fileInput.files || []));
-    });
+    if (uploadForm) {
+      uploadForm.addEventListener('submit', (event) => {
+        event.preventDefault();
+        if (!fileInput) {
+          return;
+        }
+        enqueueUploads(Array.from(fileInput.files || []));
+      });
+    }
 
     function triggerUpload(files) {
       if (files && files.length) {
@@ -588,7 +764,10 @@ $releaseUrl = appReleaseUrl($repoUrl, $version);
     });
 
     loadDismissedStatus();
-    refreshStatus();
+    clearCompletedStatus().finally(() => {
+      refreshStatus();
+    });
+    refreshReports();
     setInterval(refreshStatus, 3000);
     applyFilters();
     bindDeleteButtons();

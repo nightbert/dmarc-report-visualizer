@@ -1,8 +1,11 @@
 services:
   dmarc-report-visualizer:
-    build: .
+    build:
+      context: .
+      target: ${DOCKER_TARGET:-runtime-apache}
+    container_name: dmarc-report-visualizer
     ports:
-      - "8080:80"
+      - "8090:80"
     volumes:
       - ./data/inbox:/data/inbox
       - ./data/reports:/data/reports
