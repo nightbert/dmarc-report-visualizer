@@ -5,7 +5,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/../data_paths.php';
 
 $APP_REPO_URL = 'https://github.com/nightbert/dmarc-report-visualizer';
-$APP_VERSION = 'v1.0.0';
+$APP_VERSION = 'v1.1.0';
 
 function preferredReportsDir(): string
 {

@@ -120,6 +120,37 @@ a:hover {
   display: flex;
   flex-direction: column;
   gap: 1.5rem;
+  max-height: calc(100vh - 3rem);
+}
+
+.sidebar > .card {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  margin-bottom: 0;
+}
+
+.status-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+}
+
+.status-header-row h2 {
+  margin: 0;
+}
+
+.status-filter {
+  padding: 0.35rem 0.6rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #faf7f1;
+  font-size: 0.85rem;
+  cursor: pointer;
 }
 
 .reports {
@@ -271,6 +302,10 @@ a:hover {
   display: flex;
   flex-direction: column;
   gap: 0.85rem;
+  overflow-y: auto;
+  min-height: 0;
+  flex: 1 1 auto;
+  padding-right: 0.25rem;
 }
 
 .status-item {
@@ -601,6 +636,16 @@ a:hover {
 
   .sidebar {
     position: static;
+    max-height: none;
+  }
+
+  .sidebar > .card {
+    overflow: visible;
+  }
+
+  .status-list {
+    overflow-y: visible;
+    max-height: none;
   }
 
   .reports {

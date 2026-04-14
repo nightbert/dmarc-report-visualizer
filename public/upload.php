@@ -50,9 +50,10 @@ for ($i = 0; $i < count($files['name']); $i++) {
     $safeName = basename($name);
     $ext = strtolower(pathinfo($safeName, PATHINFO_EXTENSION));
     $isXmlGz = str_ends_with(strtolower($safeName), '.xml.gz');
+    $isEmail = in_array($ext, ['eml', 'msg'], true);
 
-    if (!in_array($ext, ['zip', 'xml', 'gz'], true) || ($ext === 'gz' && !$isXmlGz)) {
-        $results[] = ['name' => $safeName, 'status' => 'rejected', 'message' => 'Only ZIP/XML/XML.GZ allowed'];
+    if (!in_array($ext, ['zip', 'xml', 'gz', 'eml', 'msg'], true) || ($ext === 'gz' && !$isXmlGz)) {
+        $results[] = ['name' => $safeName, 'status' => 'rejected', 'message' => 'Only ZIP/XML/XML.GZ/EML/MSG allowed'];
         updateStatus($statusFile, $safeName, 'ignored', 100, 'Unsupported file type.');
         @unlink($tmp);
         continue;
@@ -65,7 +66,7 @@ for ($i = 0; $i < count($files['name']); $i++) {
         @unlink($tmp);
         continue;
     }
-    if ($reportsDir !== '' && is_dir($reportsDir)) {
+    if (!$isEmail && $reportsDir !== '' && is_dir($reportsDir)) {
         if (reportHasFile($reportsDir, $safeName)) {
             $results[] = ['name' => $safeName, 'status' => 'duplicate', 'message' => 'Already processed'];
             updateStatus($statusFile, $safeName, 'duplicate', 100, 'Already processed.');

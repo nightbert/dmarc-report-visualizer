@@ -1,6 +1,7 @@
 .git
 .gitignore
 README.md
+changelog.md
 preview.png
 docker-compose.yml
 data/reports

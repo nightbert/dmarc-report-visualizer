@@ -75,7 +75,7 @@ $releaseUrl = appReleaseUrl($repoUrl, $version);
       <?php if ($total === 0): ?>
         <div class="empty">
           <h2>No reports found yet</h2>
-          <p>Drop XML, XML.GZ, or ZIP files into <strong>/data/inbox</strong> to get started.</p>
+          <p>Drop XML, XML.GZ, ZIP, EML, or MSG files into <strong>/data/inbox</strong> to get started.</p>
         </div>
       <?php else: ?>
         <table class="reports">
@@ -124,16 +124,22 @@ $releaseUrl = appReleaseUrl($repoUrl, $version);
         <h2>Upload</h2>
         <form id="upload-form" class="upload-form">
           <div class="dropzone" id="dropzone">
-            <input type="file" name="files[]" id="file-input" multiple accept=".xml,.zip,.gz" />
+            <input type="file" name="files[]" id="file-input" multiple accept=".xml,.zip,.gz,.eml,.msg" />
             <div class="dropzone-content">
               <span class="dropzone-title">Drop files here</span>
-              <span class="dropzone-sub">or click to choose (XML, XML.GZ, ZIP)</span>
+              <span class="dropzone-sub">or click to choose (XML, XML.GZ, ZIP, EML, MSG)</span>
             </div>
           </div>
         </form>
         <div class="sidebar-divider"></div>
 
-        <h2>Fetch Status</h2>
+        <div class="status-header-row">
+          <h2>Fetch Status</h2>
+          <select id="status-filter" class="status-filter">
+            <option value="all">All</option>
+            <option value="errors">Errors only</option>
+          </select>
+        </div>
         <div id="status-list" class="status-list">
           <div class="muted">No activity yet.</div>
         </div>
@@ -144,7 +150,7 @@ $releaseUrl = appReleaseUrl($repoUrl, $version);
   <div class="drag-overlay" id="drag-overlay">
     <div class="drag-overlay-card">
       <div class="drag-overlay-title">Drop to upload</div>
-      <div class="drag-overlay-sub">XML, XML.GZ, or ZIP</div>
+      <div class="drag-overlay-sub">XML, XML.GZ, ZIP, EML, or MSG</div>
     </div>
   </div>
 
@@ -168,6 +174,9 @@ $releaseUrl = appReleaseUrl($repoUrl, $version);
   <script>
     let reportTokenIndex = <?= json_encode($tokenIndex, JSON_UNESCAPED_SLASHES) ?>;
     const statusList = document.getElementById('status-list');
+    const statusFilter = document.getElementById('status-filter');
+    let statusFilterMode = 'all';
+    let latestStatusItems = [];
     const uploadForm = document.getElementById('upload-form');
     const fileInput = document.getElementById('file-input');
     const statusReload = document.getElementById('status-reload');
@@ -232,9 +241,21 @@ $releaseUrl = appReleaseUrl($repoUrl, $version);
       if (!statusList) {
         return;
       }
-      const visibleItems = (items || []).filter((item) => !dismissedStatus.has(statusKey(item)));
+      const visibleItems = (items || []).filter((item) => {
+        if (dismissedStatus.has(statusKey(item))) {
+          return false;
+        }
+        if (statusFilterMode === 'errors') {
+          const stage = String(item && item.stage ? item.stage : '');
+          if (stage !== 'error' && stage !== 'ignored' && stage !== 'duplicate') {
+            return false;
+          }
+        }
+        return true;
+      });
       if (!visibleItems || visibleItems.length === 0) {
-        statusList.innerHTML = '<div class="muted">No activity yet.</div>';
+        const emptyMsg = statusFilterMode === 'errors' ? 'No errors.' : 'No activity yet.';
+        statusList.innerHTML = `<div class="muted">${emptyMsg}</div>`;
         return;
       }
 
@@ -547,6 +568,7 @@ $releaseUrl = appReleaseUrl($repoUrl, $version);
         }
 
         const items = Array.isArray(data.items) ? data.items : [];
+        latestStatusItems = items;
         renderStatus(items);
 
         const nextDoneSignature = buildDoneSignature(items);
@@ -606,6 +628,13 @@ $releaseUrl = appReleaseUrl($repoUrl, $version);
         filterOrg.value = '';
         currentPage = 1;
         applyFilters();
+      });
+    }
+
+    if (statusFilter) {
+      statusFilter.addEventListener('change', () => {
+        statusFilterMode = statusFilter.value === 'errors' ? 'errors' : 'all';
+        renderStatus(latestStatusItems);
       });
     }
 
