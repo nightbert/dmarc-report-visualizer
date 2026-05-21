@@ -283,15 +283,99 @@ function reportFingerprintFromXml(string $content): string
     }
 
     $reportId = xmlValue($xml, '//*[local-name()="report_metadata"]/*[local-name()="report_id"]');
-    $domain = xmlValue($xml, '//*[local-name()="policy_published"]/*[local-name()="domain"]');
-    $begin = xmlValue($xml, '//*[local-name()="report_metadata"]/*[local-name()="date_range"]/*[local-name()="begin"]');
-    $end = xmlValue($xml, '//*[local-name()="report_metadata"]/*[local-name()="date_range"]/*[local-name()="end"]');
+    $domain = dmarcReportDomain($xml, $reportId);
+    $begin = dmarcFingerprintTimestamp(xmlValue($xml, '//*[local-name()="report_metadata"]/*[local-name()="date_range"]/*[local-name()="begin"]'));
+    $end = dmarcFingerprintTimestamp(xmlValue($xml, '//*[local-name()="report_metadata"]/*[local-name()="date_range"]/*[local-name()="end"]'));
 
     if ($reportId === '' || $domain === '' || $begin === '' || $end === '') {
         return '';
     }
 
     return strtolower($reportId . '|' . $domain . '|' . $begin . '|' . $end);
+}
+
+function parseDmarcTimestamp(string $value): ?int
+{
+    $value = trim($value);
+    if ($value === '' || !ctype_digit($value)) {
+        return null;
+    }
+
+    $timestamp = (int)$value;
+    if (strlen(ltrim($value, '0')) >= 13) {
+        $timestamp = intdiv($timestamp, 1000);
+    }
+
+    return $timestamp > 0 ? $timestamp : null;
+}
+
+function dmarcFingerprintTimestamp(string $value): string
+{
+    $timestamp = parseDmarcTimestamp($value);
+    return $timestamp !== null ? (string)$timestamp : trim($value);
+}
+
+function dmarcReportDomain(SimpleXMLElement $xml, string $reportId = ''): string
+{
+    $domain = xmlValue($xml, '//*[local-name()="policy_published"]/*[local-name()="domain"]');
+    if ($domain !== '') {
+        $domain = normalizeDmarcDomain($domain);
+        if ($domain !== '') {
+            return $domain;
+        }
+    }
+
+    $domain = dmarcReportIdDomain($reportId);
+    if ($domain !== '') {
+        return $domain;
+    }
+
+    return dmarcMetadataEmailDomain($xml);
+}
+
+function dmarcReportIdDomain(string $reportId): string
+{
+    $reportId = trim($reportId);
+    if ($reportId === '') {
+        return '';
+    }
+
+    $parts = preg_split('/[:\\s]+/', $reportId);
+    if (!is_array($parts)) {
+        return '';
+    }
+
+    foreach ($parts as $part) {
+        $domain = normalizeDmarcDomain($part);
+        if ($domain !== '') {
+            return $domain;
+        }
+    }
+
+    return '';
+}
+
+function dmarcMetadataEmailDomain(SimpleXMLElement $xml): string
+{
+    $email = xmlValue($xml, '//*[local-name()="report_metadata"]/*[local-name()="email"]');
+    if ($email === '' || !str_contains($email, '@')) {
+        return '';
+    }
+
+    return normalizeDmarcDomain(substr(strrchr($email, '@'), 1));
+}
+
+function normalizeDmarcDomain(string $value): string
+{
+    $value = strtolower(trim($value));
+    $value = trim($value, " \t\n\r\0\x0B<>[]().,;:'\"");
+    $value = rtrim($value, '.');
+
+    if ($value === '' || !str_contains($value, '.') || str_contains($value, '@')) {
+        return '';
+    }
+
+    return preg_match('/^[a-z0-9][a-z0-9.-]*[a-z0-9]$/', $value) === 1 ? $value : '';
 }
 
 function loadXml(string $content): ?SimpleXMLElement

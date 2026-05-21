@@ -5,7 +5,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/../data_paths.php';
 
 $APP_REPO_URL = 'https://github.com/nightbert/dmarc-report-visualizer';
-$APP_VERSION = 'v1.1.0';
+$APP_VERSION = 'v1.1.1';
 
 function preferredReportsDir(): string
 {
@@ -171,24 +171,130 @@ function parseReportSummary(string $path): array
         return $summary;
     }
 
-    $summary['org'] = xmlValue($xml, '//*[local-name()="report_metadata"]/*[local-name()="org_name"]') ?: 'Unknown';
     $summary['report_id'] = xmlValue($xml, '//*[local-name()="report_metadata"]/*[local-name()="report_id"]');
-    $summary['domain'] = xmlValue($xml, '//*[local-name()="policy_published"]/*[local-name()="domain"]');
+    $summary['domain'] = dmarcReportDomain($xml, $summary['report_id']);
+    $summary['org'] = dmarcReportOrg($xml, $summary['domain']);
 
     $begin = xmlValue($xml, '//*[local-name()="report_metadata"]/*[local-name()="date_range"]/*[local-name()="begin"]');
     $end = xmlValue($xml, '//*[local-name()="report_metadata"]/*[local-name()="date_range"]/*[local-name()="end"]');
-    if (ctype_digit($begin)) {
-        $summary['timestamp'] = (int)$begin;
+    $beginTimestamp = parseDmarcTimestamp($begin);
+    $endTimestamp = parseDmarcTimestamp($end);
+    if ($beginTimestamp !== null) {
+        $summary['timestamp'] = $beginTimestamp;
     }
 
-    if (ctype_digit($begin) && ctype_digit($end)) {
-        $summary['date_range'] = date('Y-m-d', (int)$begin) . ' - ' . date('Y-m-d', (int)$end);
+    if ($beginTimestamp !== null && $endTimestamp !== null) {
+        $summary['date_range'] = date('Y-m-d', $beginTimestamp) . ' - ' . date('Y-m-d', $endTimestamp);
     }
 
     $records = $xml->xpath('//*[local-name()="record"]');
     $summary['records'] = is_array($records) ? count($records) : 0;
 
     return $summary;
+}
+
+function parseDmarcTimestamp(string $value): ?int
+{
+    $value = trim($value);
+    if ($value === '' || !ctype_digit($value)) {
+        return null;
+    }
+
+    $timestamp = (int)$value;
+    if (strlen(ltrim($value, '0')) >= 13) {
+        $timestamp = intdiv($timestamp, 1000);
+    }
+
+    return $timestamp > 0 ? $timestamp : null;
+}
+
+function dmarcFingerprintTimestamp(string $value): string
+{
+    $timestamp = parseDmarcTimestamp($value);
+    return $timestamp !== null ? (string)$timestamp : trim($value);
+}
+
+function dmarcReportDomain(SimpleXMLElement $xml, string $reportId = ''): string
+{
+    $domain = xmlValue($xml, '//*[local-name()="policy_published"]/*[local-name()="domain"]');
+    if ($domain !== '') {
+        $domain = normalizeDmarcDomain($domain);
+        if ($domain !== '') {
+            return $domain;
+        }
+    }
+
+    $domain = dmarcReportIdDomain($reportId);
+    if ($domain !== '') {
+        return $domain;
+    }
+
+    return dmarcMetadataEmailDomain($xml);
+}
+
+function dmarcReportOrg(SimpleXMLElement $xml, string $fallbackDomain = ''): string
+{
+    $org = normalizeDmarcOrgName(xmlValue($xml, '//*[local-name()="report_metadata"]/*[local-name()="org_name"]'));
+    if ($org !== '') {
+        return $org;
+    }
+
+    return dmarcMetadataEmailDomain($xml) ?: $fallbackDomain ?: 'Unknown';
+}
+
+function normalizeDmarcOrgName(string $value): string
+{
+    $value = trim($value);
+    if ($value === '') {
+        return '';
+    }
+
+    return preg_match('/^[\\s.\\-_]+$/', $value) === 1 ? '' : $value;
+}
+
+function dmarcReportIdDomain(string $reportId): string
+{
+    $reportId = trim($reportId);
+    if ($reportId === '') {
+        return '';
+    }
+
+    $parts = preg_split('/[:\\s]+/', $reportId);
+    if (!is_array($parts)) {
+        return '';
+    }
+
+    foreach ($parts as $part) {
+        $domain = normalizeDmarcDomain($part);
+        if ($domain !== '') {
+            return $domain;
+        }
+    }
+
+    return '';
+}
+
+function dmarcMetadataEmailDomain(SimpleXMLElement $xml): string
+{
+    $email = xmlValue($xml, '//*[local-name()="report_metadata"]/*[local-name()="email"]');
+    if ($email === '' || !str_contains($email, '@')) {
+        return '';
+    }
+
+    return normalizeDmarcDomain(substr(strrchr($email, '@'), 1));
+}
+
+function normalizeDmarcDomain(string $value): string
+{
+    $value = strtolower(trim($value));
+    $value = trim($value, " \t\n\r\0\x0B<>[]().,;:'\"");
+    $value = rtrim($value, '.');
+
+    if ($value === '' || !str_contains($value, '.') || str_contains($value, '@')) {
+        return '';
+    }
+
+    return preg_match('/^[a-z0-9][a-z0-9.-]*[a-z0-9]$/', $value) === 1 ? $value : '';
 }
 
 function loadXml(string $content): ?SimpleXMLElement

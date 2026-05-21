@@ -189,9 +189,9 @@ function reportFingerprintFromXmlFile(string $xmlPath): string
     }
 
     $reportId = xmlValue($xml, '//*[local-name()="report_metadata"]/*[local-name()="report_id"]');
-    $domain = xmlValue($xml, '//*[local-name()="policy_published"]/*[local-name()="domain"]');
-    $begin = xmlValue($xml, '//*[local-name()="report_metadata"]/*[local-name()="date_range"]/*[local-name()="begin"]');
-    $end = xmlValue($xml, '//*[local-name()="report_metadata"]/*[local-name()="date_range"]/*[local-name()="end"]');
+    $domain = dmarcReportDomain($xml, $reportId);
+    $begin = dmarcFingerprintTimestamp(xmlValue($xml, '//*[local-name()="report_metadata"]/*[local-name()="date_range"]/*[local-name()="begin"]'));
+    $end = dmarcFingerprintTimestamp(xmlValue($xml, '//*[local-name()="report_metadata"]/*[local-name()="date_range"]/*[local-name()="end"]'));
 
     if ($reportId === '' || $domain === '' || $begin === '' || $end === '') {
         return '';
@@ -419,13 +419,15 @@ function extractReportTimestamp(string $xmlPath): int
     }
 
     $begin = (string)($xml->report_metadata->date_range->begin ?? '');
-    if (ctype_digit($begin)) {
-        return (int)$begin;
+    $beginTimestamp = parseDmarcTimestamp($begin);
+    if ($beginTimestamp !== null) {
+        return $beginTimestamp;
     }
 
     $end = (string)($xml->report_metadata->date_range->end ?? '');
-    if (ctype_digit($end)) {
-        return (int)$end;
+    $endTimestamp = parseDmarcTimestamp($end);
+    if ($endTimestamp !== null) {
+        return $endTimestamp;
     }
 
     return filemtime($xmlPath) ?: time();

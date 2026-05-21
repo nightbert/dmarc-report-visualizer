@@ -8,6 +8,13 @@ The format is based on Keep a Changelog, adapted to the release history availabl
 
 - No unreleased changes documented yet.
 
+## [v1.1.1] - 2026-05-21
+
+### Fixed
+
+- Fixed DMARC date range parsing for reports that provide Unix timestamps in milliseconds.
+- Fixed parsing of malformed DMARC report metadata with placeholder organization names or missing policy domains.
+
 ## [v1.1.0] - 2026-04-14
 
 ### Added
@@ -59,7 +66,8 @@ The format is based on Keep a Changelog, adapted to the release history availabl
 - Updated the documented local UI URL to `http://localhost:8080` at that time.
 - Refreshed the README.
 
-[Unreleased]: https://github.com/nightbert/dmarc-report-visualizer/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/nightbert/dmarc-report-visualizer/compare/v1.1.1...HEAD
+[v1.1.1]: https://github.com/nightbert/dmarc-report-visualizer/compare/v1.1.0...v1.1.1
 [v1.1.0]: https://github.com/nightbert/dmarc-report-visualizer/compare/v1.0.1...v1.1.0
 [v1.0.1]: https://github.com/nightbert/dmarc-report-visualizer/compare/v1.0.0...v1.0.1
 [v1.0.0]: https://github.com/nightbert/dmarc-report-visualizer/releases/tag/v1.0.0
