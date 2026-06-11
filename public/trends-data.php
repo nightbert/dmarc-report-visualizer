@@ -6,21 +6,18 @@ require __DIR__ . '/_lib.php';
 
 header('Content-Type: application/json; charset=UTF-8');
 
-$perPage = 20;
-$page = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
 $year = isset($_GET['year']) && is_string($_GET['year']) ? trim($_GET['year']) : '';
 $month = isset($_GET['month']) && is_string($_GET['month']) ? trim($_GET['month']) : '';
 $org = isset($_GET['org']) && is_string($_GET['org']) ? trim($_GET['org']) : '';
 
-$data = reportSummariesPage($page, $perPage, $year, $month, $org);
+$data = reportTrendsData($year, $month, $org);
 
 echo json_encode([
-    'total' => (int)($data['total'] ?? 0),
-    'page' => (int)($data['page'] ?? 1),
-    'per_page' => (int)($data['per_page'] ?? $perPage),
-    'summaries' => $data['summaries'] ?? [],
+    'available' => (bool)($data['available'] ?? false),
+    'summary' => $data['summary'] ?? null,
+    'timeseries' => $data['timeseries'] ?? [],
+    'top_senders' => $data['top_senders'] ?? [],
     'year_options' => $data['year_options'] ?? [],
     'month_options' => $data['month_options'] ?? [],
     'org_options' => $data['org_options'] ?? [],
-    'token_index' => $data['token_index'] ?? [],
 ], JSON_UNESCAPED_SLASHES);

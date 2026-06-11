@@ -1,0 +1,24 @@
+@media (max-width: 720px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    position: static;
+    max-height: none;
+  }
+
+  .sidebar > .card {
+    overflow: visible;
+  }
+
+  .status-list {
+    overflow-y: visible;
+    max-height: none;
+  }
+
+  .reports {
+    display: block;
+    overflow-x: auto;
+  }
+}

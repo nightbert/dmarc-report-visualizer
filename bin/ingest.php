@@ -16,6 +16,17 @@ if (!is_dir($reportsDir)) {
     mkdir($reportsDir, 0775, true);
 }
 
+$indexDb = reportIndexOpen($reportsDir);
+if ($indexDb !== null) {
+    try {
+        reportIndexSync($indexDb, $reportsDir, 'reportIndexParseFile');
+    } catch (Throwable $e) {
+        error_log('report index sync failed, falling back to file scan: ' . $e->getMessage());
+        $indexDb = null;
+    }
+}
+ingestReportIndex($indexDb, true);
+
 $entries = @scandir($inboxDir);
 if ($entries === false) {
     fwrite(STDERR, "Could not read inbox: $inboxDir\n");
@@ -76,6 +87,7 @@ if ($retentionMonths > 0) {
     purgeOldReports($reportsDir, $retentionMonths);
 }
 
+// Extract a ZIP and ingest the DMARC XML/GZ it contains.
 function processZip(string $zipPath, string $reportsDir, string $statusFile, ?string $statusKey = null): string
 {
     $statusName = $statusKey ?? basename($zipPath);
@@ -130,6 +142,7 @@ function processZip(string $zipPath, string $reportsDir, string $statusFile, ?st
     return $best;
 }
 
+// Combine two processing results, keeping the strongest outcome.
 function mergeProcResult(string $current, string $next): string
 {
     $rank = ['failed' => 0, 'duplicate' => 1, 'stored' => 2];
@@ -138,6 +151,7 @@ function mergeProcResult(string $current, string $next): string
     return $n > $c ? $next : $current;
 }
 
+// Store a DMARC XML report (skipping duplicates) and index it.
 function processXml(string $xmlPath, string $reportsDir, string $preferredName, string $statusFile = '', ?string $statusKey = null): string
 {
     $name = sanitizeFileName($preferredName);
@@ -173,37 +187,43 @@ function processXml(string $xmlPath, string $reportsDir, string $preferredName, 
     }
 
     @chmod($destPath, 0644);
+
+    $db = ingestReportIndex();
+    if ($db !== null) {
+        try {
+            reportIndexInsertFile($db, $reportsDir, $destPath, reportIndexParseFile($destPath));
+        } catch (Throwable $e) {
+            error_log('report index insert failed: ' . $e->getMessage());
+        }
+    }
+
     return 'stored';
 }
 
-function reportFingerprintFromXmlFile(string $xmlPath): string
+// Hold and return the shared index handle for this ingest run.
+function ingestReportIndex(?PDO $db = null, bool $set = false): ?PDO
 {
-    $content = @file_get_contents($xmlPath);
-    if ($content === false || $content === '') {
-        return '';
+    static $cached = null;
+    if ($set) {
+        $cached = $db;
     }
-    $content = preg_replace('/^\\xEF\\xBB\\xBF/', '', $content);
-    $xml = loadXml($content);
-    if (!$xml instanceof SimpleXMLElement) {
-        return '';
-    }
-
-    $reportId = xmlValue($xml, '//*[local-name()="report_metadata"]/*[local-name()="report_id"]');
-    $domain = dmarcReportDomain($xml, $reportId);
-    $begin = dmarcFingerprintTimestamp(xmlValue($xml, '//*[local-name()="report_metadata"]/*[local-name()="date_range"]/*[local-name()="begin"]'));
-    $end = dmarcFingerprintTimestamp(xmlValue($xml, '//*[local-name()="report_metadata"]/*[local-name()="date_range"]/*[local-name()="end"]'));
-
-    if ($reportId === '' || $domain === '' || $begin === '' || $end === '') {
-        return '';
-    }
-
-    return strtolower($reportId . '|' . $domain . '|' . $begin . '|' . $end);
+    return $cached;
 }
 
+// Whether a report fingerprint already exists (index or file scan).
 function reportFingerprintKnown(string $reportsDir, string $fingerprint): bool
 {
     if ($fingerprint === '' || !is_dir($reportsDir)) {
         return false;
+    }
+
+    $db = ingestReportIndex();
+    if ($db !== null) {
+        try {
+            return reportIndexFingerprintKnown($db, $fingerprint);
+        } catch (Throwable $e) {
+            error_log('report index lookup failed, falling back to file scan: ' . $e->getMessage());
+        }
     }
     $iterator = new RecursiveIteratorIterator(
         new RecursiveDirectoryIterator($reportsDir, FilesystemIterator::SKIP_DOTS)
@@ -219,6 +239,7 @@ function reportFingerprintKnown(string $reportsDir, string $fingerprint): bool
     return false;
 }
 
+// Decompress an XML.GZ (or detect ZIP/XML) and ingest its report.
 function processGz(string $gzPath, string $reportsDir, string $statusFile, ?string $statusKey = null): string
 {
     $baseName = basename($gzPath);
@@ -311,6 +332,7 @@ function processGz(string $gzPath, string $reportsDir, string $statusFile, ?stri
     return $result;
 }
 
+// Read the first N bytes of a file.
 function readFileMagic(string $path, int $bytes): string
 {
     $fh = @fopen($path, 'rb');
@@ -322,90 +344,14 @@ function readFileMagic(string $path, int $bytes): string
     return is_string($data) ? $data : '';
 }
 
+// Whether a buffer looks like the start of XML.
 function isLikelyXml(string $buffer): bool
 {
     $trimmed = ltrim($buffer);
     return str_starts_with($trimmed, '<') || str_starts_with($trimmed, '<?xml');
 }
 
-function updateStatus(string $statusFile, string $name, string $stage, int $progress, string $message): void
-{
-    $dir = dirname($statusFile);
-    if (!is_dir($dir)) {
-        @mkdir($dir, 0775, true);
-    }
-
-    $fp = @fopen($statusFile, 'c+');
-    if ($fp === false) {
-        return;
-    }
-
-    flock($fp, LOCK_EX);
-    $raw = stream_get_contents($fp);
-    $status = [];
-    if (is_string($raw) && $raw !== '') {
-        $decoded = json_decode($raw, true);
-        if (is_array($decoded)) {
-            $status = $decoded;
-        }
-    }
-
-    $now = time();
-    $sequence = max(0, (int)($status['sequence'] ?? 0)) + 1;
-    $entry = [
-        'name' => $name,
-        'stage' => $stage,
-        'progress' => max(0, min(100, $progress)),
-        'message' => $message,
-        'updated_at' => $now,
-        'sequence' => $sequence,
-    ];
-
-    $items = $status['items'] ?? [];
-    $found = false;
-    foreach ($items as $idx => $item) {
-        if (($item['name'] ?? '') === $name) {
-            $items[$idx] = $entry;
-            $found = true;
-            break;
-        }
-    }
-    if (!$found) {
-        $items[] = $entry;
-    }
-
-    $status['items'] = pruneStatusItems($items);
-    $status['updated_at'] = $now;
-    $status['sequence'] = $sequence;
-
-    ftruncate($fp, 0);
-    rewind($fp);
-    fwrite($fp, json_encode($status, JSON_PRETTY_PRINT));
-    fflush($fp);
-    flock($fp, LOCK_UN);
-    fclose($fp);
-}
-
-function pruneStatusItems(array $items): array
-{
-    $cutoff = time() - 86400;
-    $filtered = [];
-
-    foreach ($items as $item) {
-        $updated = (int)($item['updated_at'] ?? 0);
-        if ($updated < $cutoff) {
-            continue;
-        }
-        $filtered[] = $item;
-    }
-
-    usort($filtered, function (array $a, array $b): int {
-        return ($b['updated_at'] ?? 0) <=> ($a['updated_at'] ?? 0);
-    });
-
-    return array_slice($filtered, 0, 50);
-}
-
+// Report start/end timestamp from the XML, falling back to mtime.
 function extractReportTimestamp(string $xmlPath): int
 {
     $content = @file_get_contents($xmlPath);
@@ -433,12 +379,14 @@ function extractReportTimestamp(string $xmlPath): int
     return filemtime($xmlPath) ?: time();
 }
 
+// Reduce a filename to safe characters.
 function sanitizeFileName(string $name): string
 {
     $name = preg_replace('/[^A-Za-z0-9._-]+/', '_', $name ?? '');
     return trim($name, '._-');
 }
 
+// Append a counter to a path until it does not exist.
 function ensureUniquePath(string $path): string
 {
     if (!file_exists($path)) {
@@ -460,6 +408,7 @@ function ensureUniquePath(string $path): string
     return $candidate;
 }
 
+// Extract and ingest DMARC attachments from an .eml file.
 function processEml(string $emlPath, string $reportsDir, string $statusFile, ?string $statusKey = null): array
 {
     $baseName = $statusKey ?? basename($emlPath);
@@ -619,10 +568,17 @@ function processEml(string $emlPath, string $reportsDir, string $statusFile, ?st
     return ['processed' => $processed, 'failed' => $failed, 'duplicates' => $duplicates];
 }
 
+// Convert an Outlook .msg to EML (or fall back to MIME) and ingest it.
 function processMsg(string $msgPath, string $reportsDir, string $statusFile): void
 {
     $baseName = basename($msgPath);
     updateStatus($statusFile, $baseName, 'extracting', 20, 'Converting MSG to EML.');
+
+    if (!isOleCompoundFile($msgPath)) {
+
+        processEml($msgPath, $reportsDir, $statusFile, $baseName);
+        return;
+    }
 
     if (!isMsgConvertAvailable()) {
         updateStatus($statusFile, $baseName, 'error', 100, 'msgconvert not installed on this image.');
@@ -685,6 +641,20 @@ function processMsg(string $msgPath, string $reportsDir, string $statusFile): vo
     }
 }
 
+// Whether a file is a real OLE2 compound document (.msg).
+function isOleCompoundFile(string $path): bool
+{
+    $fp = @fopen($path, 'rb');
+    if ($fp === false) {
+        return false;
+    }
+    $magic = fread($fp, 8);
+    fclose($fp);
+
+    return $magic === "\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1";
+}
+
+// Whether the msgconvert tool is installed.
 function isMsgConvertAvailable(): bool
 {
     $output = [];
@@ -693,6 +663,7 @@ function isMsgConvertAvailable(): bool
     return $code === 0 && !empty($output);
 }
 
+// Parse an email's parts via mailparse, falling back to the manual parser.
 function collectEmlPartsBest(string $emlPath, string $raw): array
 {
     if (extension_loaded('mailparse') && function_exists('mailparse_msg_parse_file')) {
@@ -704,6 +675,7 @@ function collectEmlPartsBest(string $emlPath, string $raw): array
     return collectEmlParts($raw);
 }
 
+// Parse an email's parts using the mailparse extension.
 function collectEmlPartsViaMailparse(string $emlPath): array
 {
     $mime = @mailparse_msg_parse_file($emlPath);
@@ -755,6 +727,7 @@ function collectEmlPartsViaMailparse(string $emlPath): array
     return $results;
 }
 
+// Parse an email's parts with the built-in MIME parser.
 function collectEmlParts(string $raw): array
 {
     $normalized = preg_replace('/\r\n?/', "\n", $raw);
@@ -771,6 +744,7 @@ function collectEmlParts(string $raw): array
     return parseEmlPart($headers, $body);
 }
 
+// Keep only the parts that look like DMARC report attachments.
 function filterDmarcAttachments(array $parts): array
 {
     $attachments = [];
@@ -809,6 +783,7 @@ function filterDmarcAttachments(array $parts): array
     return $attachments;
 }
 
+// Parse a header block into a lowercase-keyed map (unfolding lines).
 function parseEmlHeaders(string $block): array
 {
     $lines = explode("\n", $block);
@@ -841,6 +816,7 @@ function parseEmlHeaders(string $block): array
     return $headers;
 }
 
+// Parse a single MIME part, recursing into multipart bodies.
 function parseEmlPart(array $headers, string $body): array
 {
     $parsed = parseContentTypeHeader((string)($headers['content-type'] ?? 'text/plain'));
@@ -872,6 +848,7 @@ function parseEmlPart(array $headers, string $body): array
     ]];
 }
 
+// Split a multipart body into its sub-parts by boundary.
 function splitMultipart(string $body, string $boundary): array
 {
     $delim = '--' . $boundary;
@@ -928,6 +905,7 @@ function splitMultipart(string $body, string $boundary): array
     return $parsed;
 }
 
+// Parse a Content-Type/Disposition header into type and params.
 function parseContentTypeHeader(string $value): array
 {
     $value = trim($value);
@@ -972,6 +950,7 @@ function parseContentTypeHeader(string $value): array
     return ['type' => $type, 'params' => $params];
 }
 
+// Decode a part body by its transfer encoding.
 function decodeEmlContent(string $body, string $encoding): string
 {
     switch ($encoding) {
@@ -986,6 +965,7 @@ function decodeEmlContent(string $body, string $encoding): string
     }
 }
 
+// Decode an RFC 2047 encoded header value.
 function decodeMimeHeaderValue(string $value): string
 {
     $value = trim($value);
@@ -1001,6 +981,7 @@ function decodeMimeHeaderValue(string $value): string
     return $value;
 }
 
+// Recursively delete a directory.
 function removeDir(string $dir): void
 {
     if (!is_dir($dir)) {

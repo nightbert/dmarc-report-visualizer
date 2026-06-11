@@ -1,0 +1,106 @@
+.badge {
+  display: inline-block;
+  padding: 0.15rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+}
+
+.badge.pass {
+  background: var(--pass-bg);
+  color: var(--pass-text);
+}
+
+.badge.fail {
+  background: var(--fail-bg);
+  color: var(--fail-text);
+}
+
+.raw {
+  max-height: 60vh;
+  overflow: auto;
+  background: var(--code-bg);
+  color: var(--code-text);
+  padding: var(--space-5);
+  border-radius: 8px;
+  font-size: 0.85rem;
+}
+
+.multi-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.multi-details {
+  margin-top: var(--space-2);
+  font-size: 0.9rem;
+  color: var(--text);
+}
+
+.multi-details summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-weight: 600;
+  list-style: none;
+}
+
+.multi-details summary::before {
+  content: "▸";
+  margin-right: var(--space-2);
+  display: inline-block;
+  transition: transform 0.2s ease;
+}
+
+.multi-details[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.multi-details ul {
+  margin: var(--space-3) 0 0;
+  padding-left: 1.1rem;
+  display: grid;
+  gap: var(--space-2);
+}
+
+.multi-details li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.breadcrumb {
+  margin-bottom: var(--space-5);
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.inline-form {
+  display: inline-flex;
+  margin: 0;
+}
+
+.btn-danger {
+  padding: 0.5rem 0.85rem;
+  border-radius: 8px;
+  border: 1px solid var(--danger-border);
+  background: var(--danger-bg);
+  color: var(--danger-text);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-danger:hover {
+  filter: brightness(0.97);
+}
+
+.btn-small {
+  font-size: 0.85rem;
+  padding: 0.35rem 0.7rem;
+}

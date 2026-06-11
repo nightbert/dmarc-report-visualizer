@@ -2,7 +2,6 @@ services:
   dmarc-report-visualizer:
     build:
       context: .
-      target: ${DOCKER_TARGET:-runtime-apache}
     container_name: dmarc-report-visualizer
     ports:
       - "8090:80"
@@ -12,3 +11,23 @@ services:
     environment:
       SCAN_INTERVAL_SECONDS: 30
       REPORT_RETENTION_MONTHS: 0
+      MAILBOX_FETCH_ENABLED: ${MAILBOX_FETCH_ENABLED:-false}
+      MAILBOX_PROVIDER: ${MAILBOX_PROVIDER:-auto}
+      MAILBOX_POLL_INTERVAL_SECONDS: ${MAILBOX_POLL_INTERVAL_SECONDS:-0}
+      M365_TENANT_ID: ${M365_TENANT_ID:-}
+      M365_CLIENT_ID: ${M365_CLIENT_ID:-}
+      M365_CLIENT_SECRET: ${M365_CLIENT_SECRET:-}
+      M365_MAILBOX: ${M365_MAILBOX:-}
+      M365_FOLDER: ${M365_FOLDER:-Inbox}
+      M365_DELETE_AFTER_FETCH: ${M365_DELETE_AFTER_FETCH:-false}
+      M365_MAX_MESSAGES: ${M365_MAX_MESSAGES:-25}
+      IMAP_HOST: ${IMAP_HOST:-}
+      IMAP_PORT: ${IMAP_PORT:-}
+      IMAP_USERNAME: ${IMAP_USERNAME:-}
+      IMAP_PASSWORD: ${IMAP_PASSWORD:-}
+      IMAP_FOLDER: ${IMAP_FOLDER:-INBOX}
+      IMAP_ENCRYPTION: ${IMAP_ENCRYPTION:-ssl}
+      IMAP_VALIDATE_CERT: ${IMAP_VALIDATE_CERT:-true}
+      IMAP_DELETE_AFTER_FETCH: ${IMAP_DELETE_AFTER_FETCH:-false}
+      IMAP_FETCH_ALL: ${IMAP_FETCH_ALL:-false}
+      IMAP_MAX_MESSAGES: ${IMAP_MAX_MESSAGES:-25}

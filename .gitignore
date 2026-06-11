@@ -1,2 +1,4 @@
-/data/reports/*
+/data
 /.*
+!.env.example
+!/.github

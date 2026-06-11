@@ -1,0 +1,75 @@
+.reports {
+  width: 100%;
+  border-collapse: collapse;
+  overflow: hidden;
+}
+
+.reports th,
+.reports td {
+  padding: 0.85rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  font-size: 0.95rem;
+  white-space: nowrap;
+}
+
+.reports th {
+  background: var(--bg-warm);
+  font-weight: 600;
+}
+
+.reports .truncate {
+  display: inline-block;
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+.reports tr:last-child td {
+  border-bottom: none;
+}
+
+.table-fill {
+  flex: 1 1 auto;
+}
+
+.table-fill .reports {
+  border: none;
+  border-radius: 0;
+  background: transparent;
+}
+
+.empty {
+  padding: var(--space-7);
+  text-align: center;
+}
+
+.pagination {
+  margin-top: var(--space-5);
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-4);
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.page-info {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.page-btn {
+  padding: 0.5rem 0.9rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-warm);
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.page-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

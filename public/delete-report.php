@@ -45,4 +45,9 @@ if (!@unlink($filePath)) {
 
 removeEmptyParents($root, $filePath);
 
+$db = reportIndexOpen($root);
+if ($db !== null) {
+    reportIndexDeletePath($db, $root, $filePath);
+}
+
 echo json_encode(['ok' => true]);

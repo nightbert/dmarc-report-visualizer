@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/../data_paths.php';
+require_once __DIR__ . '/_lib.php';
 
 $inboxDir = resolveDataPath('INBOX_DIR', '/data/inbox', 'inbox');
 $reportsDir = resolveDataPath('REPORTS_DIR', '/data/reports', 'reports');
@@ -100,7 +101,7 @@ if (function_exists('fastcgi_finish_request')) {
 
 triggerIngest();
 
-
+// Run the ingest pipeline (via exec, with an inline fallback).
 function triggerIngest(): void
 {
     $ingestScript = realpath(__DIR__ . '/../bin/ingest.php');
@@ -121,6 +122,7 @@ function triggerIngest(): void
     error_log('Upload ingest fallback missing: ' . $inlineIngest);
 }
 
+// Run the ingest script in a separate PHP process.
 function runIngestViaExec(string $ingestScript): bool
 {
     if (!isExecAvailable()) {
@@ -145,6 +147,7 @@ function runIngestViaExec(string $ingestScript): bool
     return false;
 }
 
+// Whether exec() is available and not disabled.
 function isExecAvailable(): bool
 {
     if (!function_exists('exec')) {
@@ -160,6 +163,7 @@ function isExecAvailable(): bool
     return !in_array('exec', $disabledFunctions, true);
 }
 
+// Whether a report file with this name already exists.
 function reportHasFile(string $reportsDir, string $name): bool
 {
     $iterator = new RecursiveIteratorIterator(
@@ -176,11 +180,23 @@ function reportHasFile(string $reportsDir, string $name): bool
     return false;
 }
 
+// All known report fingerprints (index or file scan).
 function buildExistingFingerprints(string $reportsDir): array
 {
     $fingerprints = [];
     if ($reportsDir === '' || !is_dir($reportsDir)) {
         return $fingerprints;
+    }
+
+    $db = reportIndexOpen($reportsDir);
+    if ($db !== null) {
+        try {
+            if (!reportIndexIsEmpty($db) || !reportIndexDirHasXml($reportsDir)) {
+                return reportIndexAllFingerprints($db);
+            }
+        } catch (Throwable $e) {
+            error_log('report index lookup failed, falling back to file scan: ' . $e->getMessage());
+        }
     }
 
     $iterator = new RecursiveIteratorIterator(
@@ -197,7 +213,7 @@ function buildExistingFingerprints(string $reportsDir): array
         if ($content === false) {
             continue;
         }
-        $fingerprint = reportFingerprintFromXml($content);
+        $fingerprint = reportFingerprintFromContent($content);
         if ($fingerprint !== '') {
             $fingerprints[$fingerprint] = true;
         }
@@ -206,6 +222,7 @@ function buildExistingFingerprints(string $reportsDir): array
     return $fingerprints;
 }
 
+// Fingerprints of the report(s) inside an uploaded file.
 function extractReportFingerprintsFromFile(string $path, string $name): array
 {
     $ext = strtolower(pathinfo($name, PATHINFO_EXTENSION));
@@ -214,7 +231,7 @@ function extractReportFingerprintsFromFile(string $path, string $name): array
 
     if ($ext === 'xml') {
         $content = @file_get_contents($path);
-        $fingerprint = $content !== false ? reportFingerprintFromXml($content) : '';
+        $fingerprint = $content !== false ? reportFingerprintFromContent($content) : '';
         if ($fingerprint !== '') {
             $fingerprints[] = $fingerprint;
         }
@@ -223,7 +240,7 @@ function extractReportFingerprintsFromFile(string $path, string $name): array
 
     if ($ext === 'gz' && $isXmlGz) {
         $content = readGzContent($path);
-        $fingerprint = $content !== '' ? reportFingerprintFromXml($content) : '';
+        $fingerprint = $content !== '' ? reportFingerprintFromContent($content) : '';
         if ($fingerprint !== '') {
             $fingerprints[] = $fingerprint;
         }
@@ -251,7 +268,7 @@ function extractReportFingerprintsFromFile(string $path, string $name): array
             if ($content === false) {
                 continue;
             }
-            $fingerprint = reportFingerprintFromXml($content);
+            $fingerprint = reportFingerprintFromContent($content);
             if ($fingerprint !== '') {
                 $fingerprints[] = $fingerprint;
             }
@@ -262,6 +279,7 @@ function extractReportFingerprintsFromFile(string $path, string $name): array
     return array_values(array_unique($fingerprints));
 }
 
+// Whether every given fingerprint is already known.
 function allFingerprintsKnown(array $fingerprints, array $known): bool
 {
     if (empty($fingerprints)) {
@@ -275,136 +293,14 @@ function allFingerprintsKnown(array $fingerprints, array $known): bool
     return true;
 }
 
-function reportFingerprintFromXml(string $content): string
+// Compute a report's fingerprint from XML content.
+function reportFingerprintFromContent(string $content): string
 {
     $xml = loadXml($content);
-    if ($xml === null) {
-        return '';
-    }
-
-    $reportId = xmlValue($xml, '//*[local-name()="report_metadata"]/*[local-name()="report_id"]');
-    $domain = dmarcReportDomain($xml, $reportId);
-    $begin = dmarcFingerprintTimestamp(xmlValue($xml, '//*[local-name()="report_metadata"]/*[local-name()="date_range"]/*[local-name()="begin"]'));
-    $end = dmarcFingerprintTimestamp(xmlValue($xml, '//*[local-name()="report_metadata"]/*[local-name()="date_range"]/*[local-name()="end"]'));
-
-    if ($reportId === '' || $domain === '' || $begin === '' || $end === '') {
-        return '';
-    }
-
-    return strtolower($reportId . '|' . $domain . '|' . $begin . '|' . $end);
+    return $xml !== null ? reportFingerprintFromXml($xml) : '';
 }
 
-function parseDmarcTimestamp(string $value): ?int
-{
-    $value = trim($value);
-    if ($value === '' || !ctype_digit($value)) {
-        return null;
-    }
-
-    $timestamp = (int)$value;
-    if (strlen(ltrim($value, '0')) >= 13) {
-        $timestamp = intdiv($timestamp, 1000);
-    }
-
-    return $timestamp > 0 ? $timestamp : null;
-}
-
-function dmarcFingerprintTimestamp(string $value): string
-{
-    $timestamp = parseDmarcTimestamp($value);
-    return $timestamp !== null ? (string)$timestamp : trim($value);
-}
-
-function dmarcReportDomain(SimpleXMLElement $xml, string $reportId = ''): string
-{
-    $domain = xmlValue($xml, '//*[local-name()="policy_published"]/*[local-name()="domain"]');
-    if ($domain !== '') {
-        $domain = normalizeDmarcDomain($domain);
-        if ($domain !== '') {
-            return $domain;
-        }
-    }
-
-    $domain = dmarcReportIdDomain($reportId);
-    if ($domain !== '') {
-        return $domain;
-    }
-
-    return dmarcMetadataEmailDomain($xml);
-}
-
-function dmarcReportIdDomain(string $reportId): string
-{
-    $reportId = trim($reportId);
-    if ($reportId === '') {
-        return '';
-    }
-
-    $parts = preg_split('/[:\\s]+/', $reportId);
-    if (!is_array($parts)) {
-        return '';
-    }
-
-    foreach ($parts as $part) {
-        $domain = normalizeDmarcDomain($part);
-        if ($domain !== '') {
-            return $domain;
-        }
-    }
-
-    return '';
-}
-
-function dmarcMetadataEmailDomain(SimpleXMLElement $xml): string
-{
-    $email = xmlValue($xml, '//*[local-name()="report_metadata"]/*[local-name()="email"]');
-    if ($email === '' || !str_contains($email, '@')) {
-        return '';
-    }
-
-    return normalizeDmarcDomain(substr(strrchr($email, '@'), 1));
-}
-
-function normalizeDmarcDomain(string $value): string
-{
-    $value = strtolower(trim($value));
-    $value = trim($value, " \t\n\r\0\x0B<>[]().,;:'\"");
-    $value = rtrim($value, '.');
-
-    if ($value === '' || !str_contains($value, '.') || str_contains($value, '@')) {
-        return '';
-    }
-
-    return preg_match('/^[a-z0-9][a-z0-9.-]*[a-z0-9]$/', $value) === 1 ? $value : '';
-}
-
-function loadXml(string $content): ?SimpleXMLElement
-{
-    $content = preg_replace('/^\\xEF\\xBB\\xBF/', '', $content);
-    $content = preg_replace('/[^\\x09\\x0A\\x0D\\x20-\\x7E\\x80-\\xFF]/', '', $content);
-
-    if ($content === null || $content === '') {
-        return null;
-    }
-
-    $previous = libxml_use_internal_errors(true);
-    $xml = simplexml_load_string($content, 'SimpleXMLElement', LIBXML_NONET | LIBXML_NOCDATA);
-    libxml_clear_errors();
-    libxml_use_internal_errors($previous);
-
-    return $xml instanceof SimpleXMLElement ? $xml : null;
-}
-
-function xmlValue(SimpleXMLElement $context, string $path): string
-{
-    $nodes = $context->xpath($path);
-    if (!is_array($nodes) || !isset($nodes[0])) {
-        return '';
-    }
-
-    return trim((string)$nodes[0]);
-}
-
+// Read XML content from an .xml.gz, handling ZIP and plain XML.
 function readGzContent(string $path): string
 {
     $magic = readFileMagic($path, 64);
@@ -437,6 +333,7 @@ function readGzContent(string $path): string
     return is_string($output) ? $output : '';
 }
 
+// Read the first N bytes of a file.
 function readFileMagic(string $path, int $bytes): string
 {
     $fh = @fopen($path, 'rb');
@@ -448,12 +345,14 @@ function readFileMagic(string $path, int $bytes): string
     return is_string($data) ? $data : '';
 }
 
+// Whether a buffer looks like the start of XML.
 function isLikelyXml(string $buffer): bool
 {
     $trimmed = ltrim($buffer);
     return str_starts_with($trimmed, '<') || str_starts_with($trimmed, '<?xml');
 }
 
+// Read the first XML entry's content from a ZIP.
 function readXmlFromZip(string $path): string
 {
     if (!class_exists('ZipArchive')) {
@@ -483,6 +382,7 @@ function readXmlFromZip(string $path): string
     return $content;
 }
 
+// Human-readable message for a PHP upload error code.
 function uploadErrorMessage(int $code): string
 {
     return match ($code) {
@@ -495,82 +395,4 @@ function uploadErrorMessage(int $code): string
         UPLOAD_ERR_EXTENSION => 'Upload failed: blocked by PHP extension.',
         default => 'Upload failed: unknown error.',
     };
-}
-
-function updateStatus(string $statusFile, string $name, string $stage, int $progress, string $message): void
-{
-    $dir = dirname($statusFile);
-    if (!is_dir($dir)) {
-        @mkdir($dir, 0775, true);
-    }
-
-    $fp = @fopen($statusFile, 'c+');
-    if ($fp === false) {
-        return;
-    }
-
-    flock($fp, LOCK_EX);
-    $raw = stream_get_contents($fp);
-    $status = [];
-    if (is_string($raw) && $raw !== '') {
-        $decoded = json_decode($raw, true);
-        if (is_array($decoded)) {
-            $status = $decoded;
-        }
-    }
-
-    $now = time();
-    $sequence = max(0, (int)($status['sequence'] ?? 0)) + 1;
-    $entry = [
-        'name' => $name,
-        'stage' => $stage,
-        'progress' => max(0, min(100, $progress)),
-        'message' => $message,
-        'updated_at' => $now,
-        'sequence' => $sequence,
-    ];
-
-    $items = $status['items'] ?? [];
-    $found = false;
-    foreach ($items as $idx => $item) {
-        if (($item['name'] ?? '') === $name) {
-            $items[$idx] = $entry;
-            $found = true;
-            break;
-        }
-    }
-    if (!$found) {
-        $items[] = $entry;
-    }
-
-    $status['items'] = pruneStatusItems($items);
-    $status['updated_at'] = $now;
-    $status['sequence'] = $sequence;
-
-    ftruncate($fp, 0);
-    rewind($fp);
-    fwrite($fp, json_encode($status, JSON_PRETTY_PRINT));
-    fflush($fp);
-    flock($fp, LOCK_UN);
-    fclose($fp);
-}
-
-function pruneStatusItems(array $items): array
-{
-    $cutoff = time() - 86400;
-    $filtered = [];
-
-    foreach ($items as $item) {
-        $updated = (int)($item['updated_at'] ?? 0);
-        if ($updated < $cutoff) {
-            continue;
-        }
-        $filtered[] = $item;
-    }
-
-    usort($filtered, function (array $a, array $b): int {
-        return ($b['updated_at'] ?? 0) <=> ($a['updated_at'] ?? 0);
-    });
-
-    return array_slice($filtered, 0, 50);
 }

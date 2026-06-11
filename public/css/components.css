@@ -1,0 +1,28 @@
+.card,
+.stat-card,
+.reports,
+.table-fill,
+.empty {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.empty {
+  border-style: dashed;
+}
+
+.label,
+.filter-group label,
+.hero-stat-label,
+.stat-card span,
+.status-stage {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.filter-summary::-webkit-details-marker,
+.multi-details summary::-webkit-details-marker {
+  display: none;
+}

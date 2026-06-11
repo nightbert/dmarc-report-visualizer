@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+// Absolute path to the repo's bundled ./data directory (cached).
 function repoDataRoot(): string
 {
     static $root = null;
@@ -12,12 +13,14 @@ function repoDataRoot(): string
     return $root;
 }
 
+// Build a path inside the repo's bundled data directory.
 function repoDataPath(string $relative): string
 {
     $relative = ltrim($relative, DIRECTORY_SEPARATOR);
     return repoDataRoot() . DIRECTORY_SEPARATOR . $relative;
 }
 
+// Resolve a data path from its env override, system default, or repo fallback.
 function resolveDataPath(string $envKey, string $systemDefault, string $repoRelative): string
 {
     $envValue = getenv($envKey);
@@ -38,6 +41,7 @@ function resolveDataPath(string $envKey, string $systemDefault, string $repoRela
     return repoDataPath($repoRelative);
 }
 
+// Whether a directory exists (or can be created) and is writable.
 function ensureWritableDir(string $dir): bool
 {
     if ($dir === '') {

@@ -1,0 +1,71 @@
+.sidebar {
+  position: sticky;
+  top: calc(var(--header-height) + 2rem);
+  align-self: start;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  max-height: calc(100vh - var(--header-height) - 3.5rem);
+}
+
+.sidebar > .card {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  margin-bottom: 0;
+}
+
+.mailbox-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-1);
+}
+
+.mailbox-row button {
+  padding: 0.5rem 0.9rem;
+  border-radius: 8px;
+  border: none;
+  background: var(--btn-dark);
+  color: var(--on-accent);
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.mailbox-row button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.mailbox-last {
+  font-size: 0.82rem;
+}
+
+.status-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-4);
+}
+
+.status-header-row h2 {
+  margin: 0;
+}
+
+.status-filter {
+  padding: 0.35rem 0.6rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-warm);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.sidebar-divider {
+  margin: 1.25rem 0;
+  border-top: 1px solid var(--border);
+}

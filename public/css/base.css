@@ -1,0 +1,94 @@
+:root {
+  color-scheme: light;
+
+  --bg: #f6f3ee;
+  --bg-warm: #faf7f1;
+  --bg-glow: #fef5e7;
+  --white: #ffffff;
+  --card: var(--white);
+  --glass: rgba(255, 255, 255, 0.7);
+  --text: #1f2430;
+  --text-strong: #1f2a35;
+  --muted: #6b7280;
+  --border: #e4e0d9;
+  --hover-border: #cfc7bb;
+
+  --accent: #22577a;
+  --accent-rgb: 34, 87, 122;
+  --accent-teal: #3a7ca5;
+  --on-accent: var(--white);
+
+  --btn-dark: #1f2937;
+
+  --hero-grad-start: #fff4e0;
+  --dropzone-grad-start: #f3efe7;
+
+  --info-bg: #f4f6f8;
+  --info-border: #d6dde6;
+  --success-bg: #e6f7ef;
+  --success-border: #b7e2cd;
+  --danger-bg: #fdecec;
+  --danger-border: #f5bcbc;
+  --danger-text: #991b1b;
+  --progress-track: #e6dfd6;
+
+  --pass-bg: #d1fae5;
+  --pass-text: #065f46;
+  --fail-bg: #fee2e2;
+  --fail-text: var(--danger-text);
+
+  --code-bg: #111827;
+  --code-text: #f9fafb;
+
+  --chart-pass: #2e7d52;
+  --chart-dkim: #3a86a8;
+  --chart-spf: #d99a2b;
+  --chart-fail: #c0492f;
+  --chart-mid: #b9821f;
+  --rate-track: #eeeeee;
+
+  --overlay-rgb: 15, 23, 42;
+
+  --warn-link: #b45309;
+
+  --space-1: 0.25rem;
+  --space-2: 0.4rem;
+  --space-3: 0.5rem;
+  --space-4: 0.75rem;
+  --space-5: 1rem;
+  --space-6: 1.5rem;
+  --space-7: 2rem;
+
+  --header-height: 7rem;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  color: var(--text);
+  background: radial-gradient(circle at top left, var(--bg-glow), var(--bg));
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.small {
+  font-size: 0.85rem;
+}

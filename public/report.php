@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 require __DIR__ . '/_lib.php';
+require __DIR__ . '/_layout.php';
 
 $root = reportsRoot();
 $token = $_GET['f'] ?? '';
@@ -125,10 +126,7 @@ $recordHeaders = [
     'auth_spf_multi' => ['label' => 'Auth SPF (multi)', 'show' => !empty($fieldPresence['auth_spf_multi'])],
     'auth_dkim_multi' => ['label' => 'Auth DKIM (multi)', 'show' => !empty($fieldPresence['auth_dkim_multi'])],
 ];
-$repoUrl = appRepoUrl();
-$version = appVersion();
-$releaseUrl = appReleaseUrl($repoUrl, $version);
-
+// Render a pass/fail value as a colored badge.
 function badge(string $value): string
 {
     $clean = trim($value);
@@ -141,15 +139,7 @@ function badge(string $value): string
 }
 
 ?>
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Report Details</title>
-  <link rel="stylesheet" href="/style.css">
-</head>
-<body>
+<?php renderHead('Report Details'); ?>
   <main class="container">
     <div class="breadcrumb">
       <a href="/">&larr; Back to reports</a>
@@ -195,6 +185,7 @@ function badge(string $value): string
       <section class="card">
         <h2>Records</h2>
         <p class="muted small">Visible columns are inferred from this report's schema.</p>
+        <div class="table-scroll">
         <table class="reports">
           <thead>
             <tr>
@@ -274,6 +265,7 @@ function badge(string $value): string
             <?php endforeach; ?>
           </tbody>
         </table>
+        </div>
       </section>
     <?php endif; ?>
 
@@ -283,47 +275,9 @@ function badge(string $value): string
     </section>
   </main>
 
-  <footer class="site-footer">
-    <div class="footer-content">
-      <span>Author Marc Reinke</span>
-      <?php if ($repoUrl !== ''): ?>
-        <span class="footer-sep">•</span>
-        <a href="<?= htmlspecialchars($repoUrl, ENT_QUOTES) ?>" target="_blank" rel="noopener">GitHub project</a>
-      <?php endif; ?>
-      <?php if ($releaseUrl !== '' && $version !== ''): ?>
-        <span class="footer-sep">•</span>
-        <a href="<?= htmlspecialchars($releaseUrl, ENT_QUOTES) ?>" target="_blank" rel="noopener">Version <?= htmlspecialchars($version, ENT_QUOTES) ?></a>
-      <?php elseif ($version !== ''): ?>
-        <span class="footer-sep">•</span>
-        <span>Version <?= htmlspecialchars($version, ENT_QUOTES) ?></span>
-      <?php endif; ?>
-    </div>
-  </footer>
+  <?php renderFooter(); ?>
 
-  <script>
-    const deleteForm = document.getElementById('delete-form');
-    if (deleteForm) {
-      deleteForm.addEventListener('submit', async (event) => {
-        event.preventDefault();
-        const confirmed = window.confirm('Are you sure?');
-        if (!confirmed) {
-          return;
-        }
-        const formData = new FormData(deleteForm);
-        const response = await fetch('/delete-report.php', {
-          method: 'POST',
-          body: formData,
-        });
-        if (response.ok) {
-          const data = await response.json();
-          if (data && data.ok) {
-            window.location.href = '/';
-            return;
-          }
-        }
-        window.alert('Deletion failed.');
-      });
-    }
-  </script>
+  <script src="/js/update-check.js" defer></script>
+  <script src="/js/report.js" defer></script>
 </body>
 </html>

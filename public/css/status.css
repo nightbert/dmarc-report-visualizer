@@ -1,0 +1,128 @@
+.status-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  overflow-y: auto;
+  min-height: 0;
+  flex: 1 1 auto;
+  padding-right: var(--space-1);
+}
+
+.status-item {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: var(--space-4);
+  background: var(--bg-warm);
+  position: relative;
+}
+
+.status-item.info {
+  background: var(--info-bg);
+  border-color: var(--info-border);
+}
+
+.status-item.success {
+  background: var(--success-bg);
+  border-color: var(--success-border);
+}
+
+.status-item.danger {
+  background: var(--danger-bg);
+  border-color: var(--danger-border);
+}
+
+.status-header {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  font-weight: 600;
+  margin-bottom: var(--space-2);
+  align-items: center;
+}
+
+.status-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-stage {
+  font-size: 0.8rem;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.status-link {
+  font-size: 0.75rem;
+  text-transform: none;
+  letter-spacing: normal;
+  padding: 0.2rem 0.45rem;
+  border-radius: 999px;
+  background: var(--white);
+  border: 1px solid var(--border);
+  color: var(--accent);
+}
+
+.status-dismiss {
+  position: absolute;
+  top: 0.45rem;
+  right: 0.45rem;
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--white);
+  color: var(--muted);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.status-dismiss:hover {
+  color: var(--text);
+  border-color: var(--hover-border);
+}
+
+@keyframes statusIn {
+  from {
+    opacity: 0;
+    transform: translateX(-12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-item {
+    animation: none;
+  }
+}
+
+.progress {
+  height: 8px;
+  background: var(--progress-track);
+  border-radius: 999px;
+  overflow: hidden;
+  margin-bottom: var(--space-2);
+}
+
+.progress-bar {
+  height: 100%;
+  background: var(--accent-teal);
+  transition: width 0.2s ease;
+}
+
+.status-message {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.status-item--new {
+  animation: statusIn 0.5s ease both;
+}
