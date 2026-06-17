@@ -6,13 +6,16 @@
   flex-direction: column;
   gap: var(--space-6);
   max-height: calc(100vh - var(--header-height) - 3.5rem);
+  /* When the combined cards (e.g. with the filter card expanded) exceed the
+     viewport, scroll the whole sidebar instead of clipping its cards. */
+  overflow-y: auto;
 }
 
 .sidebar > .card {
   display: flex;
   flex-direction: column;
-  min-height: 0;
-  overflow: hidden;
+  /* Don't let cards shrink below their content; the sidebar scrolls instead. */
+  flex-shrink: 0;
   margin-bottom: 0;
 }
 
