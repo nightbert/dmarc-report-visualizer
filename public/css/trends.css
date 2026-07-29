@@ -1,79 +1,75 @@
-.hero-nav {
+/* The filter bar sits above the content on every page that has one, so the
+   controls are always in the same place. */
+.filter-bar {
   display: flex;
-  gap: var(--space-2);
-  margin-left: auto;
+  align-items: center;
+  gap: var(--space-3) var(--space-5);
   flex-wrap: wrap;
+  padding-bottom: var(--space-5);
+  margin-bottom: var(--space-5);
+  border-bottom: 1px solid var(--border);
 }
 
-.hero-nav a {
-  padding: 0.45rem 0.9rem;
-  border-radius: 999px;
+/* A segmented control, not a row of pills: hairline dividers, square corners. */
+.range-switch {
+  display: inline-flex;
   border: 1px solid var(--border);
-  background: var(--glass);
-  font-size: 0.9rem;
-  color: var(--text);
+  border-radius: 2px;
+  background: var(--white);
+  overflow: hidden;
 }
 
-.hero-nav a:hover {
+.range-option {
+  padding: 0.3rem 0.7rem;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--muted);
+  border-right: 1px solid var(--border);
+}
+
+.range-option:last-child {
+  border-right: none;
+}
+
+.range-option:hover {
   text-decoration: none;
-  border-color: var(--accent);
+  color: var(--text);
+  background: var(--bg-warm);
 }
 
-.hero-nav a.is-active {
+.range-option.is-active {
   background: var(--accent);
-  border-color: var(--accent);
   color: var(--on-accent);
 }
 
-.hero-nav + .hero-stat {
-  margin-left: 0;
+.filter-inline {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-3);
 }
 
-.trends.container {
-  max-width: 1200px;
+.filter-inline label {
+  font-size: 0.8rem;
+  color: var(--muted);
 }
 
-.stat-cards {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: var(--space-5);
-  margin-bottom: var(--space-6);
-}
-
-.stat-card {
-  padding: 1rem 1.1rem;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-}
-
-.stat-card strong {
-  font-size: 1.5rem;
+.filter-inline select,
+.status-filter {
+  padding: 0.28rem 0.4rem;
+  border-radius: 2px;
+  border: 1px solid var(--border);
+  background: var(--white);
   color: var(--text);
-  line-height: 1.1;
-}
-
-.stat-card span {
-  font-size: 0.72rem;
-}
-
-.stat-card.is-good strong {
-  color: var(--chart-pass);
-}
-
-.stat-card.is-mid strong {
-  color: var(--chart-mid);
-}
-
-.stat-card.is-warn strong {
-  color: var(--chart-fail);
+  font-size: 0.85rem;
+  max-width: 11rem;
+  cursor: pointer;
 }
 
 .chart-legend {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.9rem;
-  margin-top: var(--space-3);
+  gap: var(--space-6);
+  margin-top: var(--space-4);
   font-size: 0.8rem;
   color: var(--muted);
 }
@@ -85,9 +81,8 @@
 }
 
 .legend-swatch {
-  width: 0.8rem;
-  height: 0.8rem;
-  border-radius: 3px;
+  width: 0.7rem;
+  height: 0.7rem;
   display: inline-block;
 }
 
@@ -97,7 +92,7 @@
 .swatch-fail { background: var(--chart-fail); }
 
 .chart-wrap {
-  margin-top: var(--space-5);
+  margin-top: var(--space-6);
   overflow-x: auto;
 }
 
@@ -114,7 +109,12 @@
 
 .trend-chart .axis-label {
   fill: var(--muted);
-  font-size: 11px;
+  font-size: 10px;
+  font-family: var(--font-mono);
+}
+
+.trend-chart .chart-empty-label {
+  font-size: 13px;
 }
 
 .trend-chart .bar-seg {
@@ -122,7 +122,16 @@
 }
 
 .trend-chart .bar-seg:hover {
-  opacity: 0.8;
+  opacity: 0.75;
+}
+
+.trend-chart .bar-seg.is-clickable {
+  cursor: pointer;
+}
+
+.trend-chart .bar-seg.is-clickable:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .bar-full { fill: var(--chart-pass); }
@@ -130,35 +139,66 @@
 .bar-spf { fill: var(--chart-spf); }
 .bar-fail { fill: var(--chart-fail); }
 
-.table-scroll {
-  overflow-x: auto;
+/* The drilldown does float above the reading order, so it keeps a frame. */
+.bucket-panel {
+  padding: var(--space-6);
+  border: 1px solid var(--rule-strong);
+  border-radius: 2px;
+  background: var(--white);
 }
 
-.senders-table .num {
-  text-align: right;
-  white-space: nowrap;
+.bucket-panel .bucket-heading {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-4);
+  flex-wrap: wrap;
 }
 
-.senders-table .mono {
-  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  font-size: 0.85rem;
+.bucket-panel .bucket-heading h2 {
+  margin: 0;
 }
 
-.rate-bar {
-  display: inline-flex;
-  width: 90px;
-  height: 8px;
-  border-radius: 999px;
+.disposition-bar {
+  display: flex;
+  height: 10px;
   overflow: hidden;
   background: var(--rate-track);
-  vertical-align: middle;
 }
 
-.rate-bar .rate-pass { background: var(--chart-pass); }
-.rate-bar .rate-fail { background: var(--chart-fail); }
+.disposition-seg {
+  display: block;
+  min-width: 2px;
+}
 
-.rate-text {
-  margin-left: var(--space-3);
+.disposition-legend {
+  list-style: none;
+  margin: var(--space-5) 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-7);
   font-size: 0.85rem;
-  color: var(--muted);
 }
+
+.disposition-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.disposition-legend strong {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+
+.disposition-swatch {
+  width: 0.7rem;
+  height: 0.7rem;
+  display: inline-block;
+}
+
+.seg-none { background: var(--chart-dkim); }
+.seg-quarantine { background: var(--chart-spf); }
+.seg-reject { background: var(--chart-fail); }
+.seg-other { background: var(--muted); }

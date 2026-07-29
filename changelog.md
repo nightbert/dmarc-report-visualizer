@@ -4,6 +4,47 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog, adapted to the release history available in this repository.
 
+## [v1.3.0] - 2026-07-29
+
+### Added
+
+- Added a **health panel** to the top of the dashboard covering the last 30 days: pass rate, failing messages, failing sources and newly seen sources, each compared against the preceding 30 days. The window ends at the newest day covered by the stored reports rather than today, because aggregate reports arrive days after the fact.
+- Added a **Domains** table to the dashboard listing each reported domain with its message volume, pass rate, failing count, distinct sending sources, and how many messages were quarantined or rejected.
+- Added a **Needs attention** table to the dashboard ranking the source IPs that send unaligned mail, with the day each IP was first seen anywhere in the index so new senders stand out. Each IP links to its sender drilldown.
+
+- Added a **time range switch** (7 days / 30 days / 90 days / 12 months / all time) to the Trends and sender views, replacing the year and month selects. Like the dashboard health panel, a range ends at the newest day covered by the stored reports rather than today. Trends compares every headline figure against the window immediately before the selected range.
+- Added a **domain filter** to the Trends view, so a domain can be followed from the dashboard's Domains table into its own trend. The organization filter remains as "Reporter".
+- Added a **Policy applied** panel to Trends showing message volume by DMARC disposition (delivered / quarantined / rejected), which was already indexed but never surfaced.
+- Added "Aligned by" and "First seen" columns to the Trends top-senders table, flagging sources first seen within the final week of the range.
+
+### Changed
+
+- Demoted the dashboard's report listing below the new panels and gave its heading the file count for the current range.
+- Moved the Trends filters out of the sidebar into a bar above the content, so the view now uses the full page width.
+- The window the filters resolve to and the note about what the change figures compare against are now one line below the filter bar, on both the dashboard and Trends. Previously the date range sat inside the bar, where it wrapped onto its own line whenever the controls filled the width.
+- Grouped the sidebar by job: **Upload** holds the dropzone, **Fetch** holds the mailbox button, its last-fetch time and the ingest status feed, which previously sat apart with the upload form between them. The reload action moved from the upload heading to the fetch heading, next to the status filter.
+- The ingest status feed's dismiss button is now part of the item's header row instead of an overlay, so it can no longer cover the stage label or the report link next to it.
+- The mailbox's last-fetch label now reads as a relative time ("Last fetch: 2h ago") beside the fetch button; the exact timestamp and the fetch message moved into its tooltip. The previous locale-formatted absolute timestamp was wide enough to squeeze the button until its own label wrapped. A failed fetch is marked by colour instead of an "(error)" suffix.
+- Removed the sidebar's Reload button. It cleared completed status entries and reloaded the page, both of which already happen on their own — on page load and through the three-second status poll.
+- Reduced the Trends headline from six figures to three (pass rate, messages, failing), each with its change against the preceding window, and gave the sender view the same three.
+- Trends and sender views now show an empty state when the selected range holds no records, instead of a page of zeros and a red 0% pass rate.
+- JS-rendered figures now format numbers in a fixed locale, so they match the server-rendered ones instead of following the browser's locale.
+- **Reworked the visual design.** Panels replace the stack of floating cards: content now sits on one flat surface, separated by hairline rules and space. Headings are set in a serif against the sans body text, and every figure — table cells, headline numbers, axis labels, date ranges — is set in tabular monospace so columns of numbers align digit for digit. Uppercase letterspaced micro-labels, pill-shaped controls, decorative gradients and drop shadows are gone; colour is now reserved for meaning (pass, fail, links).
+- **Unified the filters across pages.** The dashboard's collapsed sidebar filter card is replaced by the same filter bar the Trends view uses, rendered from one shared function in `_layout.php` so the two cannot drift apart. The dashboard sidebar now holds only upload and ingest status — actions and process state, not data filters.
+- The dashboard's report listing shares the range, domain and org filters with the health panels above it, so the whole page describes one slice of time. Year and month selects are gone; "All time" restores the complete archive.
+
+- The masthead is now identical on every page — same title, tagline and total report count, unaffected by the active filters. `renderHero()` no longer takes a title or subtitle, so the pages cannot drift apart; which page you are on is shown by the navigation. The sender and report views name what you are looking at in a second header row below the masthead, with the way back out of them at the right end of that row. The count for the current range moved to the report listing's heading.
+
+### Fixed
+
+- Fixed the focus ring being clipped on controls sitting at the sidebar's right edge. The sidebar scrolls vertically, and a box that scrolls on one axis clips the other too, so the outline had nowhere to draw; the sidebar now reserves room for it, and drops the clipping entirely on narrow screens where it does not scroll.
+- Fixed stylesheets surviving a deploy in the browser cache, which left new markup being styled by old rules. `style.css` pulled the other files in with `@import`, and each of those kept its own cache entry, so nothing forced them to be re-fetched. The stylesheets are now linked individually from `renderHead()`, each stamped with its file modification time.
+- Fixed "First seen" in the Trends top-senders table reporting a source's first day *within the selected range* rather than its first appearance overall, which flagged nearly every row as a new sender on short ranges.
+- Fixed a cross-site scripting hole in the Trends view. The filters were embedded into the page's inline script as JSON with unescaped slashes, so a domain or reporter value holding `</script>` — trivially placed there through the query string — closed the script block and turned the rest of the payload into markup. All inline data now goes through one helper that encodes tags as escape sequences.
+- Fixed the report detail view inferring its record columns from the first record alone. Presence was recorded with `??`, which never overwrites the `false` stored for the first record, so a report whose first record carried no `auth_results` hid the authentication columns for every record that followed. A field now counts as present when any record carries it.
+- Fixed the listing's index-less scan fallback ordering rows differently from the SQLite path when sorting by "Records": it treated the number 0 as a missing value and pushed those reports to the end, while SQL keeps 0 as a value and sorts only NULL and empty strings last.
+- Fixed the dashboard's "New sources" figure always reading 0 on the "All time" range. That range resolves to an open window with no end, and the count was anchored at that end; it now anchors at the newest indexed day, like the other ranges.
+
 ## [v1.2.0] - 2026-06-11
 
 ### Added

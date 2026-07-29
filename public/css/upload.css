@@ -7,17 +7,16 @@
 .dropzone {
   position: relative;
   padding: var(--space-6);
-  border-radius: 16px;
-  border: 2px dashed rgba(var(--accent-rgb), 0.4);
-  background: linear-gradient(135deg, var(--dropzone-grad-start), var(--white) 70%);
+  border-radius: 2px;
+  border: 1px dashed var(--hover-border);
+  background: var(--bg-warm);
   text-align: center;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+  transition: border-color 0.15s ease, background 0.15s ease;
 }
 
 .dropzone:hover {
-  border-color: rgba(var(--accent-rgb), 0.7);
-  box-shadow: 0 10px 30px rgba(var(--accent-rgb), 0.1);
-  transform: translateY(-1px);
+  border-color: var(--accent);
+  background: var(--white);
 }
 
 .dropzone input[type="file"] {
@@ -34,8 +33,9 @@
 }
 
 .dropzone-title {
-  font-weight: 700;
-  font-size: 1.05rem;
+  font-family: var(--font-serif);
+  font-weight: 600;
+  font-size: 1rem;
 }
 
 .dropzone-sub {
@@ -77,15 +77,16 @@
 
 .drag-overlay-card {
   background: var(--white);
-  border-radius: 20px;
+  border-radius: 2px;
   padding: 2rem 2.5rem;
   text-align: center;
-  box-shadow: 0 30px 60px rgba(var(--overlay-rgb), 0.2);
+  box-shadow: 0 20px 50px rgba(var(--overlay-rgb), 0.25);
 }
 
 .drag-overlay-title {
-  font-size: 1.3rem;
-  font-weight: 700;
+  font-family: var(--font-serif);
+  font-size: 1.2rem;
+  font-weight: 600;
   margin-bottom: var(--space-2);
 }
 

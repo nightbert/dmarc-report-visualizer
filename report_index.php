@@ -271,6 +271,12 @@ function reportIndexAllFingerprints(PDO $db): array
     return $fingerprints;
 }
 
+// How many reports the index holds, ignoring every filter.
+function reportIndexCount(PDO $db): int
+{
+    return (int)$db->query('SELECT COUNT(*) FROM reports')->fetchColumn();
+}
+
 // Whether the reports table has no rows.
 function reportIndexIsEmpty(PDO $db): bool
 {
@@ -294,51 +300,66 @@ function reportIndexDirHasXml(string $reportsDir): bool
     return false;
 }
 
-// All report summary rows, newest first.
-function reportIndexSummaries(PDO $db): array
-{
-    $rows = [];
-    foreach ($db->query('SELECT * FROM reports ORDER BY sort_ts DESC') as $row) {
-        $rows[] = $row;
-    }
-    return $rows;
-}
-
-// Build the WHERE clause and params for year/month/org filters.
-function reportIndexFilterClause(?string $year, ?string $month, ?string $org): array
+// Build the WHERE clause and params for the report listing: the resolved
+// window, the reporting org and the reported domain. Reports are placed by
+// their sort timestamp, the same value the listing orders by.
+function reportIndexFilterClause(array $filters): array
 {
     $clauses = [];
     $params = [];
-    if ($year !== null && $year !== '') {
-        $clauses[] = "strftime('%Y', sort_ts, 'unixepoch') = :year";
-        $params[':year'] = $year;
+    if ((int)($filters['start_ts'] ?? 0) > 0) {
+        $clauses[] = 'sort_ts >= :start_ts';
+        $params[':start_ts'] = (int)$filters['start_ts'];
     }
-    if ($month !== null && $month !== '') {
-        $clauses[] = "strftime('%m', sort_ts, 'unixepoch') = :month";
-        $params[':month'] = $month;
+    if ((int)($filters['end_ts'] ?? 0) > 0) {
+        $clauses[] = 'sort_ts <= :end_ts';
+        $params[':end_ts'] = (int)$filters['end_ts'];
     }
-    if ($org !== null && $org !== '') {
+    if ((string)($filters['org'] ?? '') !== '') {
         $clauses[] = 'org = :org';
-        $params[':org'] = $org;
+        $params[':org'] = (string)$filters['org'];
+    }
+    if ((string)($filters['domain'] ?? '') !== '') {
+        $clauses[] = 'domain = :domain';
+        $params[':domain'] = (string)$filters['domain'];
     }
     $where = $clauses === [] ? '' : (' WHERE ' . implode(' AND ', $clauses));
     return [$where, $params];
 }
 
-// Fetch one filtered, paginated page of report rows plus the total.
-function reportIndexQueryPage(PDO $db, ?string $year, ?string $month, ?string $org, int $limit, int $offset): array
+// Sortable report columns mapped to their ORDER BY expression. Unknown keys
+// fall back to the report start date, which is the default listing order.
+function reportIndexSortColumns(): array
 {
-    [$where, $params] = reportIndexFilterClause($year, $month, $org);
+    return [
+        'start' => 'COALESCE(begin_ts, sort_ts)',
+        'end' => 'end_ts',
+        'org' => 'org COLLATE NOCASE',
+        'domain' => 'domain COLLATE NOCASE',
+        'report_id' => 'report_id COLLATE NOCASE',
+        'records' => 'records',
+    ];
+}
+
+// Fetch one filtered, paginated page of report rows plus the total.
+function reportIndexQueryPage(PDO $db, array $filters, int $limit, int $offset, string $sort = 'start', string $dir = 'desc'): array
+{
+    [$where, $params] = reportIndexFilterClause($filters);
 
     $countStmt = $db->prepare('SELECT COUNT(*) FROM reports' . $where);
-    $countStmt->execute($params);
+    reportBindParams($countStmt, $params);
+    $countStmt->execute();
     $total = (int)$countStmt->fetchColumn();
 
-    $sql = 'SELECT * FROM reports' . $where . ' ORDER BY sort_ts DESC LIMIT :limit OFFSET :offset';
+    $columns = reportIndexSortColumns();
+    $expression = $columns[$sort] ?? $columns['start'];
+    $direction = strtolower($dir) === 'asc' ? 'ASC' : 'DESC';
+    // Keep rows without a value at the end in both directions.
+    $order = "CASE WHEN {$expression} IS NULL OR {$expression} = '' THEN 1 ELSE 0 END, {$expression} {$direction}, sort_ts DESC";
+
+    $sql = 'SELECT * FROM reports' . $where . ' ORDER BY ' . $order . ' LIMIT :limit OFFSET :offset';
     $stmt = $db->prepare($sql);
-    foreach ($params as $key => $value) {
-        $stmt->bindValue($key, $value, PDO::PARAM_STR);
-    }
+    reportBindParams($stmt, $params);
     $stmt->bindValue(':limit', max(1, $limit), PDO::PARAM_INT);
     $stmt->bindValue(':offset', max(0, $offset), PDO::PARAM_INT);
     $stmt->execute();
@@ -347,7 +368,7 @@ function reportIndexQueryPage(PDO $db, ?string $year, ?string $month, ?string $o
     return ['rows' => is_array($rows) ? $rows : [], 'total' => $total];
 }
 
-// Distinct year, month and organization values for the filters.
+// Distinct year, month, organization and domain values for the filters.
 function reportIndexFilterOptions(PDO $db): array
 {
     $years = [];
@@ -371,7 +392,12 @@ function reportIndexFilterOptions(PDO $db): array
         $orgs[] = (string)$row['org'];
     }
 
-    return ['years' => $years, 'months' => $months, 'orgs' => $orgs];
+    $domains = [];
+    foreach ($db->query("SELECT DISTINCT domain FROM reports WHERE domain <> '' ORDER BY domain COLLATE NOCASE") as $row) {
+        $domains[] = (string)$row['domain'];
+    }
+
+    return ['years' => $years, 'months' => $months, 'orgs' => $orgs, 'domains' => $domains];
 }
 
 // Read a value from the index metadata table.
@@ -423,44 +449,150 @@ function reportIndexDeletePath(PDO $db, string $reportsDir, string $absolutePath
     }
 }
 
-// Build the WHERE clause and params for record-level queries.
-function reportRecordsFilterClause(?string $year, ?string $month, ?string $org, ?string $ip = null, string $alias = ''): array
+// Selectable trend ranges mapped to their length in days (0 = every record).
+function reportRangeOptions(): array
+{
+    return ['7d' => 7, '30d' => 30, '90d' => 90, '12m' => 365, 'all' => 0];
+}
+
+// Human label for a range key.
+function reportRangeLabel(string $range): string
+{
+    $labels = [
+        '7d' => 'Last 7 days',
+        '30d' => 'Last 30 days',
+        '90d' => 'Last 90 days',
+        '12m' => 'Last 12 months',
+        'all' => 'All time',
+    ];
+    return $labels[$range] ?? $labels['30d'];
+}
+
+// Resolve a range key into its window plus the preceding window of equal
+// length, so views can show a change. The window is anchored at the newest
+// indexed day rather than today, because reports arrive days after the fact,
+// and snapped to whole UTC days because day_ts holds a report's raw begin_ts.
+function reportRangeWindow(PDO $db, string $range): array
+{
+    return reportRangeWindowFromLatest($range, reportRecordsLatestDay($db));
+}
+
+// The same resolution against an already known anchor, for the report listing's
+// index-less scan fallback.
+function reportRangeWindowFromLatest(string $range, int $latest): array
+{
+    $options = reportRangeOptions();
+    $range = isset($options[$range]) ? $range : '30d';
+    $days = $options[$range];
+
+    if ($latest <= 0 || $days === 0) {
+        return [
+            'range' => $range,
+            'days' => $days,
+            'start_ts' => 0,
+            'end_ts' => 0,
+            'previous_start_ts' => 0,
+            'previous_end_ts' => 0,
+        ];
+    }
+
+    $day = 86400;
+    $end = $latest - ($latest % $day) + $day - 1;
+    $start = $end - $days * $day + 1;
+    return [
+        'range' => $range,
+        'days' => $days,
+        'start_ts' => $start,
+        'end_ts' => $end,
+        'previous_start_ts' => $start - $days * $day,
+        'previous_end_ts' => $start - 1,
+    ];
+}
+
+// Record-level filters for a resolved window plus the active org, domain and
+// source ip. Pass $previous to target the comparison window instead.
+function reportRecordFilters(array $window, string $org, string $domain, string $ip = '', bool $previous = false): array
+{
+    return [
+        'start_ts' => $previous ? ($window['previous_start_ts'] ?? 0) : ($window['start_ts'] ?? 0),
+        'end_ts' => $previous ? ($window['previous_end_ts'] ?? 0) : ($window['end_ts'] ?? 0),
+        'days' => $window['days'] ?? 0,
+        'org' => $org,
+        'domain' => $domain,
+        'ip' => $ip,
+    ];
+}
+
+// Bind params with their SQL type: integers bound as text never match an
+// aggregate like MIN(day_ts), which carries no column affinity.
+function reportBindParams(PDOStatement $stmt, array $params): void
+{
+    foreach ($params as $key => $value) {
+        $stmt->bindValue($key, $value, is_int($value) ? PDO::PARAM_INT : PDO::PARAM_STR);
+    }
+}
+
+// Build the WHERE clause and params for record-level queries. Filters carry the
+// resolved window (start_ts/end_ts), the reporting org, the reported domain and
+// a source ip; every key is optional.
+function reportRecordsFilterClause(array $filters, string $alias = ''): array
 {
     $col = $alias !== '' ? $alias . '.' : '';
     $clauses = [$col . 'day_ts > 0'];
     $params = [];
-    if ($year !== null && $year !== '') {
-        $clauses[] = "strftime('%Y', " . $col . "day_ts, 'unixepoch') = :year";
-        $params[':year'] = $year;
+    if ((int)($filters['start_ts'] ?? 0) > 0) {
+        $clauses[] = $col . 'day_ts >= :start_ts';
+        $params[':start_ts'] = (int)$filters['start_ts'];
     }
-    if ($month !== null && $month !== '') {
-        $clauses[] = "strftime('%m', " . $col . "day_ts, 'unixepoch') = :month";
-        $params[':month'] = $month;
+    if ((int)($filters['end_ts'] ?? 0) > 0) {
+        $clauses[] = $col . 'day_ts <= :end_ts';
+        $params[':end_ts'] = (int)$filters['end_ts'];
     }
-    if ($org !== null && $org !== '') {
+    if ((string)($filters['org'] ?? '') !== '') {
         $clauses[] = $col . 'org = :org';
-        $params[':org'] = $org;
+        $params[':org'] = (string)$filters['org'];
     }
-    if ($ip !== null && $ip !== '') {
+    if ((string)($filters['domain'] ?? '') !== '') {
+        $clauses[] = $col . 'domain = :domain';
+        $params[':domain'] = (string)$filters['domain'];
+    }
+    if ((string)($filters['ip'] ?? '') !== '') {
         $clauses[] = $col . 'source_ip = :ip';
-        $params[':ip'] = $ip;
+        $params[':ip'] = (string)$filters['ip'];
     }
     return [' WHERE ' . implode(' AND ', $clauses), $params];
 }
 
-// Per-day message volume split by DMARC alignment.
-function reportTrendsTimeseries(PDO $db, ?string $year, ?string $month, ?string $org, ?string $ip = null): array
+// Message volume split by DMARC alignment, bucketed per day for ranges up to a
+// quarter and per month (most recent 12) beyond that.
+function reportTrendsTimeseries(PDO $db, array $filters): array
 {
-    [$where, $params] = reportRecordsFilterClause($year, $month, $org, $ip);
-    $sql = "SELECT strftime('%Y-%m-%d', day_ts, 'unixepoch') AS day,
+    [$where, $params] = reportRecordsFilterClause($filters);
+
+    // Daily buckets stay readable up to about a quarter (≤92 bars). Longer
+    // ranges group by month and keep the most recent 12 buckets, so the
+    // overview never shows one bar per day since the first report ingested.
+    $days = (int)($filters['days'] ?? 0);
+    $byMonth = $days === 0 || $days > 92;
+    $bucket = $byMonth
+        ? "strftime('%Y-%m', day_ts, 'unixepoch')"
+        : "strftime('%Y-%m-%d', day_ts, 'unixepoch')";
+    $sql = "SELECT $bucket AS day,
                 SUM(message_count) AS total,
                 SUM(CASE WHEN dkim_aligned = 1 AND spf_aligned = 1 THEN message_count ELSE 0 END) AS full_pass,
                 SUM(CASE WHEN dkim_aligned = 1 AND spf_aligned = 0 THEN message_count ELSE 0 END) AS dkim_only,
                 SUM(CASE WHEN dkim_aligned = 0 AND spf_aligned = 1 THEN message_count ELSE 0 END) AS spf_only,
                 SUM(CASE WHEN dkim_aligned = 0 AND spf_aligned = 0 THEN message_count ELSE 0 END) AS fail
-            FROM report_records" . $where . ' GROUP BY day ORDER BY day';
+            FROM report_records" . $where . ' GROUP BY day';
+    if ($byMonth) {
+        // Most recent 12 months, then back to chronological order for the chart.
+        $sql = "SELECT * FROM ($sql ORDER BY day DESC LIMIT 12) ORDER BY day ASC";
+    } else {
+        $sql .= ' ORDER BY day';
+    }
     $stmt = $db->prepare($sql);
-    $stmt->execute($params);
+    reportBindParams($stmt, $params);
+    $stmt->execute();
     $rows = [];
     foreach ($stmt as $row) {
         $rows[] = [
@@ -472,23 +604,74 @@ function reportTrendsTimeseries(PDO $db, ?string $year, ?string $month, ?string 
             'fail' => (int)$row['fail'],
         ];
     }
+
+    $rows = fillTimeseriesGaps($rows, $byMonth);
+    if ($byMonth && count($rows) > 12) {
+        // Keep the most recent 12 calendar months once gaps are filled.
+        $rows = array_slice($rows, -12);
+    }
     return $rows;
 }
 
-// Top source IPs by message volume with pass/fail counts.
-function reportTrendsTopSenders(PDO $db, ?string $year, ?string $month, ?string $org, int $limit): array
+// Insert zero-value buckets for any calendar months (or days) missing between
+// the first and last bucket, so the chart shows a continuous axis instead of
+// collapsing gaps where no reports were ingested.
+function fillTimeseriesGaps(array $rows, bool $byMonth): array
 {
-    [$where, $params] = reportRecordsFilterClause($year, $month, $org);
-    $sql = "SELECT source_ip,
-                SUM(message_count) AS total,
-                SUM(CASE WHEN dkim_aligned = 1 OR spf_aligned = 1 THEN message_count ELSE 0 END) AS pass,
-                SUM(CASE WHEN dkim_aligned = 0 AND spf_aligned = 0 THEN message_count ELSE 0 END) AS fail
-            FROM report_records" . $where
-        . " AND source_ip <> '' GROUP BY source_ip ORDER BY total DESC, source_ip LIMIT :limit";
-    $stmt = $db->prepare($sql);
-    foreach ($params as $k => $v) {
-        $stmt->bindValue($k, $v, PDO::PARAM_STR);
+    if (count($rows) < 2) {
+        return $rows;
     }
+
+    $existing = [];
+    foreach ($rows as $row) {
+        $existing[$row['day']] = $row;
+    }
+    $keys = array_keys($existing);
+    sort($keys);
+
+    $fmt = $byMonth ? 'Y-m' : 'Y-m-d';
+    $step = $byMonth ? '+1 month' : '+1 day';
+    $cursor = DateTimeImmutable::createFromFormat('!' . $fmt, $keys[0]);
+    $end = DateTimeImmutable::createFromFormat('!' . $fmt, $keys[count($keys) - 1]);
+    if ($cursor === false || $end === false) {
+        return $rows;
+    }
+
+    $filled = [];
+    while ($cursor <= $end) {
+        $key = $cursor->format($fmt);
+        $filled[] = $existing[$key] ?? [
+            'day' => $key,
+            'total' => 0,
+            'full' => 0,
+            'dkim_only' => 0,
+            'spf_only' => 0,
+            'fail' => 0,
+        ];
+        $cursor = $cursor->modify($step);
+    }
+    return $filled;
+}
+
+// Top source IPs by message volume with pass/fail counts and how they aligned.
+function reportTrendsTopSenders(PDO $db, array $filters, int $limit): array
+{
+    [$where, $params] = reportRecordsFilterClause($filters, 'rr');
+    // first_seen has to look past the selected window — a plain MIN(day_ts)
+    // would only report the source's first day inside the range, which is no
+    // use for spotting senders that are genuinely new.
+    $sql = "SELECT rr.source_ip AS source_ip,
+                SUM(rr.message_count) AS total,
+                SUM(CASE WHEN rr.dkim_aligned = 1 OR rr.spf_aligned = 1 THEN rr.message_count ELSE 0 END) AS pass,
+                SUM(CASE WHEN rr.dkim_aligned = 0 AND rr.spf_aligned = 0 THEN rr.message_count ELSE 0 END) AS fail,
+                SUM(CASE WHEN rr.dkim_aligned = 1 THEN rr.message_count ELSE 0 END) AS dkim,
+                SUM(CASE WHEN rr.spf_aligned = 1 THEN rr.message_count ELSE 0 END) AS spf,
+                (SELECT MIN(f.day_ts) FROM report_records f
+                    WHERE f.source_ip = rr.source_ip AND f.day_ts > 0) AS first_seen
+            FROM report_records rr" . $where
+        . " AND rr.source_ip <> '' GROUP BY rr.source_ip ORDER BY total DESC, rr.source_ip LIMIT :limit";
+    $stmt = $db->prepare($sql);
+    reportBindParams($stmt, $params);
     $stmt->bindValue(':limit', max(1, $limit), PDO::PARAM_INT);
     $stmt->execute();
     $rows = [];
@@ -498,15 +681,40 @@ function reportTrendsTopSenders(PDO $db, ?string $year, ?string $month, ?string 
             'total' => (int)$row['total'],
             'pass' => (int)$row['pass'],
             'fail' => (int)$row['fail'],
+            'dkim' => (int)$row['dkim'],
+            'spf' => (int)$row['spf'],
+            'first_seen' => (int)($row['first_seen'] ?? 0),
         ];
     }
     return $rows;
 }
 
-// Headline totals: messages, pass rate, sources and domains.
-function reportTrendsSummary(PDO $db, ?string $year, ?string $month, ?string $org, ?string $ip = null): array
+// Message volume per DMARC disposition (none / quarantine / reject), which
+// answers whether the published policy is actually acting on failures.
+function reportTrendsDispositions(PDO $db, array $filters): array
 {
-    [$where, $params] = reportRecordsFilterClause($year, $month, $org, $ip);
+    [$where, $params] = reportRecordsFilterClause($filters);
+    $sql = "SELECT disposition, SUM(message_count) AS total
+            FROM report_records" . $where . ' GROUP BY disposition';
+    $stmt = $db->prepare($sql);
+    reportBindParams($stmt, $params);
+    $stmt->execute();
+
+    $totals = ['none' => 0, 'quarantine' => 0, 'reject' => 0, 'other' => 0];
+    foreach ($stmt as $row) {
+        $key = strtolower(trim((string)$row['disposition']));
+        if (!array_key_exists($key, $totals)) {
+            $key = 'other';
+        }
+        $totals[$key] += (int)$row['total'];
+    }
+    return $totals;
+}
+
+// Headline totals: messages, pass rate, sources and domains.
+function reportTrendsSummary(PDO $db, array $filters): array
+{
+    [$where, $params] = reportRecordsFilterClause($filters);
     $sql = "SELECT
                 SUM(message_count) AS total,
                 SUM(CASE WHEN dkim_aligned = 1 OR spf_aligned = 1 THEN message_count ELSE 0 END) AS pass,
@@ -514,7 +722,8 @@ function reportTrendsSummary(PDO $db, ?string $year, ?string $month, ?string $or
                 COUNT(DISTINCT domain) AS domains
             FROM report_records" . $where;
     $stmt = $db->prepare($sql);
-    $stmt->execute($params);
+    reportBindParams($stmt, $params);
+    $stmt->execute();
     $row = $stmt->fetch() ?: [];
     $total = (int)($row['total'] ?? 0);
     $pass = (int)($row['pass'] ?? 0);
@@ -529,16 +738,17 @@ function reportTrendsSummary(PDO $db, ?string $year, ?string $month, ?string $or
 }
 
 // Per-domain message totals for a single source IP.
-function reportSenderByDomain(PDO $db, string $ip, ?string $year, ?string $month, ?string $org): array
+function reportSenderByDomain(PDO $db, array $filters): array
 {
-    [$where, $params] = reportRecordsFilterClause($year, $month, $org, $ip);
+    [$where, $params] = reportRecordsFilterClause($filters);
     $sql = "SELECT domain,
                 SUM(message_count) AS total,
                 SUM(CASE WHEN dkim_aligned = 1 OR spf_aligned = 1 THEN message_count ELSE 0 END) AS pass,
                 SUM(CASE WHEN dkim_aligned = 0 AND spf_aligned = 0 THEN message_count ELSE 0 END) AS fail
             FROM report_records" . $where . ' GROUP BY domain ORDER BY total DESC';
     $stmt = $db->prepare($sql);
-    $stmt->execute($params);
+    reportBindParams($stmt, $params);
+    $stmt->execute();
     $rows = [];
     foreach ($stmt as $row) {
         $rows[] = [
@@ -551,10 +761,189 @@ function reportSenderByDomain(PDO $db, string $ip, ?string $year, ?string $month
     return $rows;
 }
 
-// Reports a single source IP appears in, with totals.
-function reportSenderReports(PDO $db, string $ip, ?string $year, ?string $month, ?string $org): array
+// Newest day covered by any indexed record, or 0 when there is none.
+function reportRecordsLatestDay(PDO $db): int
 {
-    [$where, $params] = reportRecordsFilterClause($year, $month, $org, $ip, 'rr');
+    $row = $db->query('SELECT MAX(day_ts) AS latest FROM report_records WHERE day_ts > 0')->fetch();
+    return (int)($row['latest'] ?? 0);
+}
+
+// Totals for a window: messages, pass, fail, distinct sources and domains.
+function reportHealthWindow(PDO $db, array $filters): array
+{
+    [$where, $params] = reportRecordsFilterClause($filters);
+    $sql = "SELECT
+                SUM(message_count) AS total,
+                SUM(CASE WHEN dkim_aligned = 1 OR spf_aligned = 1 THEN message_count ELSE 0 END) AS pass,
+                COUNT(DISTINCT source_ip) AS sources,
+                COUNT(DISTINCT domain) AS domains,
+                COUNT(DISTINCT CASE WHEN dkim_aligned = 0 AND spf_aligned = 0 THEN source_ip END) AS failing_sources
+            FROM report_records" . $where;
+    $stmt = $db->prepare($sql);
+    reportBindParams($stmt, $params);
+    $stmt->execute();
+    $row = $stmt->fetch() ?: [];
+    $total = (int)($row['total'] ?? 0);
+    $pass = (int)($row['pass'] ?? 0);
+    return [
+        'total' => $total,
+        'pass' => $pass,
+        'fail' => $total - $pass,
+        'pass_rate' => $total > 0 ? round($pass / $total * 100, 1) : 0.0,
+        'sources' => (int)($row['sources'] ?? 0),
+        'domains' => (int)($row['domains'] ?? 0),
+        'failing_sources' => (int)($row['failing_sources'] ?? 0),
+    ];
+}
+
+// Per-domain totals in a window, biggest volume first.
+function reportHealthDomains(PDO $db, array $filters, int $limit): array
+{
+    [$where, $params] = reportRecordsFilterClause($filters);
+    $sql = "SELECT domain,
+                SUM(message_count) AS total,
+                SUM(CASE WHEN dkim_aligned = 1 OR spf_aligned = 1 THEN message_count ELSE 0 END) AS pass,
+                SUM(CASE WHEN dkim_aligned = 0 AND spf_aligned = 0 THEN message_count ELSE 0 END) AS fail,
+                COUNT(DISTINCT source_ip) AS sources,
+                SUM(CASE WHEN disposition IN ('quarantine', 'reject') THEN message_count ELSE 0 END) AS enforced
+            FROM report_records" . $where
+        . " AND domain <> '' GROUP BY domain ORDER BY total DESC LIMIT :limit";
+    $stmt = $db->prepare($sql);
+    reportBindParams($stmt, $params);
+    $stmt->bindValue(':limit', max(1, $limit), PDO::PARAM_INT);
+    $stmt->execute();
+    $rows = [];
+    foreach ($stmt as $row) {
+        $total = (int)$row['total'];
+        $pass = (int)$row['pass'];
+        $rows[] = [
+            'domain' => (string)$row['domain'],
+            'total' => $total,
+            'pass' => $pass,
+            'fail' => (int)$row['fail'],
+            'pass_rate' => $total > 0 ? round($pass / $total * 100, 1) : 0.0,
+            'sources' => (int)$row['sources'],
+            'enforced' => (int)$row['enforced'],
+        ];
+    }
+    return $rows;
+}
+
+// Source IPs sending unaligned mail in a day window, worst volume first. Each
+// row carries the day the IP was first seen anywhere in the index, so the view
+// can flag senders that only started showing up recently.
+function reportHealthFailingSources(PDO $db, array $filters, int $limit): array
+{
+    [$where, $params] = reportRecordsFilterClause($filters, 'rr');
+    $sql = "SELECT rr.source_ip AS source_ip,
+                SUM(rr.message_count) AS total,
+                SUM(CASE WHEN rr.dkim_aligned = 0 AND rr.spf_aligned = 0 THEN rr.message_count ELSE 0 END) AS fail,
+                COUNT(DISTINCT rr.domain) AS domains,
+                (SELECT MIN(f.day_ts) FROM report_records f
+                    WHERE f.source_ip = rr.source_ip AND f.day_ts > 0) AS first_seen
+            FROM report_records rr" . $where
+        . " AND rr.source_ip <> '' GROUP BY rr.source_ip HAVING fail > 0
+            ORDER BY fail DESC, total DESC LIMIT :limit";
+    $stmt = $db->prepare($sql);
+    reportBindParams($stmt, $params);
+    $stmt->bindValue(':limit', max(1, $limit), PDO::PARAM_INT);
+    $stmt->execute();
+    $rows = [];
+    foreach ($stmt as $row) {
+        $total = (int)$row['total'];
+        $fail = (int)$row['fail'];
+        $rows[] = [
+            'source_ip' => (string)$row['source_ip'],
+            'total' => $total,
+            'fail' => $fail,
+            'pass' => $total - $fail,
+            'domains' => (int)$row['domains'],
+            'first_seen' => (int)($row['first_seen'] ?? 0),
+        ];
+    }
+    return $rows;
+}
+
+// How many source IPs appear for the first time inside a window. Org and domain
+// narrow which sources count, but the window itself must not sit in the WHERE
+// clause: "first seen" has to look at the whole history, so it belongs in
+// HAVING. The bounds must bind as integers — MIN(day_ts) drops the column's
+// integer affinity, and a text-bound value would compare as INTEGER < TEXT and
+// never match.
+function reportHealthNewSourceCount(PDO $db, array $filters, int $startTs, int $endTs): int
+{
+    [$where, $params] = reportRecordsFilterClause(['org' => $filters['org'] ?? '', 'domain' => $filters['domain'] ?? '']);
+    $sql = "SELECT COUNT(*) AS new_sources FROM (
+                SELECT source_ip FROM report_records" . $where
+        . " AND source_ip <> '' GROUP BY source_ip
+                HAVING MIN(day_ts) >= :start AND MIN(day_ts) <= :end
+            )";
+    $stmt = $db->prepare($sql);
+    reportBindParams($stmt, $params);
+    $stmt->bindValue(':start', $startTs, PDO::PARAM_INT);
+    $stmt->bindValue(':end', $endTs, PDO::PARAM_INT);
+    $stmt->execute();
+    $row = $stmt->fetch() ?: [];
+    return (int)($row['new_sources'] ?? 0);
+}
+
+// Alignment buckets of the trends chart mapped to their record condition.
+function reportAlignmentConditions(): array
+{
+    return [
+        'full' => 'dkim_aligned = 1 AND spf_aligned = 1',
+        'dkim_only' => 'dkim_aligned = 1 AND spf_aligned = 0',
+        'spf_only' => 'dkim_aligned = 0 AND spf_aligned = 1',
+        'fail' => 'dkim_aligned = 0 AND spf_aligned = 0',
+    ];
+}
+
+// Reports behind one chart column: a day ("YYYY-MM-DD") or month ("YYYY-MM")
+// bucket, optionally narrowed to a single alignment segment.
+function reportBucketReports(PDO $db, string $bucket, string $alignment, array $filters): array
+{
+    [$where, $params] = reportRecordsFilterClause($filters, 'rr');
+
+    $format = strlen($bucket) > 7 ? '%Y-%m-%d' : '%Y-%m';
+    $where .= " AND strftime('{$format}', rr.day_ts, 'unixepoch') = :bucket";
+    $params[':bucket'] = $bucket;
+
+    // The alignment columns exist only on report_records, so they need no alias.
+    $conditions = reportAlignmentConditions();
+    if (isset($conditions[$alignment])) {
+        $where .= ' AND ' . $conditions[$alignment];
+    }
+
+    $sql = "SELECT rr.report_path AS path,
+                SUM(rr.message_count) AS total,
+                COUNT(DISTINCT rr.source_ip) AS sources,
+                r.org AS org, r.domain AS domain, r.begin_ts AS begin_ts, r.end_ts AS end_ts
+            FROM report_records rr
+            LEFT JOIN reports r ON r.path = rr.report_path" . $where
+        . ' GROUP BY rr.report_path ORDER BY total DESC';
+    $stmt = $db->prepare($sql);
+    reportBindParams($stmt, $params);
+    $stmt->execute();
+
+    $rows = [];
+    foreach ($stmt as $row) {
+        $rows[] = [
+            'path' => (string)$row['path'],
+            'total' => (int)$row['total'],
+            'sources' => (int)$row['sources'],
+            'org' => (string)($row['org'] ?? ''),
+            'domain' => (string)($row['domain'] ?? ''),
+            'begin_ts' => $row['begin_ts'] !== null ? (int)$row['begin_ts'] : null,
+            'end_ts' => $row['end_ts'] !== null ? (int)$row['end_ts'] : null,
+        ];
+    }
+    return $rows;
+}
+
+// Reports a single source IP appears in, with totals.
+function reportSenderReports(PDO $db, array $filters): array
+{
+    [$where, $params] = reportRecordsFilterClause($filters, 'rr');
     $sql = "SELECT rr.report_path AS path,
                 SUM(rr.message_count) AS total,
                 r.org AS org, r.domain AS domain, r.begin_ts AS begin_ts, r.end_ts AS end_ts
@@ -562,7 +951,8 @@ function reportSenderReports(PDO $db, string $ip, ?string $year, ?string $month,
             LEFT JOIN reports r ON r.path = rr.report_path" . $where
         . ' GROUP BY rr.report_path ORDER BY total DESC';
     $stmt = $db->prepare($sql);
-    $stmt->execute($params);
+    reportBindParams($stmt, $params);
+    $stmt->execute();
     $rows = [];
     foreach ($stmt as $row) {
         $rows[] = [

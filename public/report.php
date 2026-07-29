@@ -39,6 +39,7 @@ if ($xml) {
             $dkim = xmlValue($record, './*[local-name()="row"]/*[local-name()="policy_evaluated"]/*[local-name()="dkim"]');
             $spf = xmlValue($record, './*[local-name()="row"]/*[local-name()="policy_evaluated"]/*[local-name()="spf"]');
             $headerFrom = xmlValue($record, './*[local-name()="identifiers"]/*[local-name()="header_from"]');
+            $envelopeTo = xmlValue($record, './*[local-name()="identifiers"]/*[local-name()="envelope_to"]');
 
             $spfDomains = xmlValues($record, './*[local-name()="auth_results"]/*[local-name()="spf"]/*[local-name()="domain"]');
             $spfResults = xmlValues($record, './*[local-name()="auth_results"]/*[local-name()="spf"]/*[local-name()="result"]');
@@ -89,6 +90,7 @@ if ($xml) {
                 'dkim' => $dkim,
                 'spf' => $spf,
                 'header_from' => $headerFrom,
+                'envelope_to' => $envelopeTo,
                 'auth_spf_domain' => $authSpfDomain,
                 'auth_spf_result' => $authSpfResult,
                 'auth_dkim_domain' => $authDkimDomain,
@@ -100,16 +102,19 @@ if ($xml) {
                 'auth_dkim_count' => count($authDkimEntries),
             ];
 
-            $fieldPresence['source_ip'] = $fieldPresence['source_ip'] ?? ($sourceIp !== '');
-            $fieldPresence['count'] = $fieldPresence['count'] ?? ($count !== '');
-            $fieldPresence['disposition'] = $fieldPresence['disposition'] ?? ($disposition !== '');
-            $fieldPresence['dkim'] = $fieldPresence['dkim'] ?? ($dkim !== '');
-            $fieldPresence['spf'] = $fieldPresence['spf'] ?? ($spf !== '');
-            $fieldPresence['header_from'] = $fieldPresence['header_from'] ?? ($headerFrom !== '');
-            $fieldPresence['auth_spf'] = $fieldPresence['auth_spf'] ?? ($authSpfDomain !== '' || $authSpfResult !== '');
-            $fieldPresence['auth_dkim'] = $fieldPresence['auth_dkim'] ?? ($authDkimDomain !== '' || $authDkimResult !== '' || $authDkimSelector !== '');
-            $fieldPresence['auth_spf_multi'] = $fieldPresence['auth_spf_multi'] ?? (count($authSpfEntries) > 1);
-            $fieldPresence['auth_dkim_multi'] = $fieldPresence['auth_dkim_multi'] ?? (count($authDkimEntries) > 1);
+            // A field counts as present when any record carries it: reporters
+            // fill them per record, so the first one decides nothing.
+            $fieldPresence['source_ip'] = !empty($fieldPresence['source_ip']) || $sourceIp !== '';
+            $fieldPresence['count'] = !empty($fieldPresence['count']) || $count !== '';
+            $fieldPresence['disposition'] = !empty($fieldPresence['disposition']) || $disposition !== '';
+            $fieldPresence['dkim'] = !empty($fieldPresence['dkim']) || $dkim !== '';
+            $fieldPresence['spf'] = !empty($fieldPresence['spf']) || $spf !== '';
+            $fieldPresence['header_from'] = !empty($fieldPresence['header_from']) || $headerFrom !== '';
+            $fieldPresence['envelope_to'] = !empty($fieldPresence['envelope_to']) || $envelopeTo !== '';
+            $fieldPresence['auth_spf'] = !empty($fieldPresence['auth_spf']) || $authSpfDomain !== '' || $authSpfResult !== '';
+            $fieldPresence['auth_dkim'] = !empty($fieldPresence['auth_dkim']) || $authDkimDomain !== '' || $authDkimResult !== '' || $authDkimSelector !== '';
+            $fieldPresence['auth_spf_multi'] = !empty($fieldPresence['auth_spf_multi']) || count($authSpfEntries) > 1;
+            $fieldPresence['auth_dkim_multi'] = !empty($fieldPresence['auth_dkim_multi']) || count($authDkimEntries) > 1;
         }
     }
 }
@@ -121,6 +126,7 @@ $recordHeaders = [
     'dkim' => ['label' => 'DKIM', 'show' => !empty($fieldPresence['dkim'])],
     'spf' => ['label' => 'SPF', 'show' => !empty($fieldPresence['spf'])],
     'header_from' => ['label' => 'Header From', 'show' => !empty($fieldPresence['header_from'])],
+    'envelope_to' => ['label' => 'Envelope To', 'show' => !empty($fieldPresence['envelope_to'])],
     'auth_spf' => ['label' => 'Auth SPF', 'show' => !empty($fieldPresence['auth_spf'])],
     'auth_dkim' => ['label' => 'Auth DKIM', 'show' => !empty($fieldPresence['auth_dkim'])],
     'auth_spf_multi' => ['label' => 'Auth SPF (multi)', 'show' => !empty($fieldPresence['auth_spf_multi'])],
@@ -139,15 +145,15 @@ function badge(string $value): string
 }
 
 ?>
-<?php renderHead('Report Details'); ?>
+<?php
+renderHead('Report Details');
+renderHero();
+renderSubHero('Report details', $summary['report_id'] !== '' ? $summary['report_id'] : basename($filePath), '/', 'Back to reports');
+?>
   <main class="container">
-    <div class="breadcrumb">
-      <a href="/">&larr; Back to reports</a>
-    </div>
-
-    <section class="card">
-      <div class="card-header">
-        <h1>Report Details</h1>
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Overview</h2>
         <form id="delete-form" class="inline-form" method="post" action="/delete-report.php">
           <input type="hidden" name="token" value="<?= htmlspecialchars($token, ENT_QUOTES) ?>">
           <button type="submit" class="btn-danger btn-small">Delete</button>
@@ -161,10 +167,6 @@ function badge(string $value): string
         <div>
           <span class="label">Domain</span>
           <p><?= htmlspecialchars($summary['domain'], ENT_QUOTES) ?></p>
-        </div>
-        <div>
-          <span class="label">Report ID</span>
-          <p><?= htmlspecialchars($summary['report_id'], ENT_QUOTES) ?></p>
         </div>
         <div>
           <span class="label">Date range</span>
@@ -182,16 +184,18 @@ function badge(string $value): string
     </section>
 
     <?php if (!empty($records)): ?>
-      <section class="card">
-        <h2>Records</h2>
-        <p class="muted small">Visible columns are inferred from this report's schema.</p>
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Records</h2>
+          <span class="panel-note">Visible columns are inferred from this report's schema</span>
+        </div>
         <div class="table-scroll">
-        <table class="reports">
+        <table class="reports" data-sortable>
           <thead>
             <tr>
               <?php foreach ($recordHeaders as $key => $config): ?>
                 <?php if ($config['show']): ?>
-                  <th><?= htmlspecialchars($config['label'], ENT_QUOTES) ?></th>
+                  <th<?= $key === 'count' ? ' data-sort-default="desc"' : '' ?>><?= htmlspecialchars($config['label'], ENT_QUOTES) ?></th>
                 <?php endif; ?>
               <?php endforeach; ?>
             </tr>
@@ -203,7 +207,16 @@ function badge(string $value): string
                   <?php if (!$config['show']): ?>
                     <?php continue; ?>
                   <?php endif; ?>
-                  <td>
+                  <?php
+                    // Columns whose cell text is not sortable on its own get an explicit key.
+                    $sortKey = null;
+                    if ($key === 'auth_spf_multi') {
+                        $sortKey = (string)(int)$row['auth_spf_count'];
+                    } elseif ($key === 'auth_dkim_multi') {
+                        $sortKey = (string)(int)$row['auth_dkim_count'];
+                    }
+                  ?>
+                  <td<?= $sortKey !== null ? ' data-sort="' . htmlspecialchars($sortKey, ENT_QUOTES) . '"' : '' ?>>
                     <?php if ($key === 'source_ip'): ?>
                       <?= htmlspecialchars($row['source_ip'], ENT_QUOTES) ?>
                     <?php elseif ($key === 'count'): ?>
@@ -216,6 +229,8 @@ function badge(string $value): string
                       <?= badge($row['spf']) ?>
                     <?php elseif ($key === 'header_from'): ?>
                       <?= htmlspecialchars($row['header_from'], ENT_QUOTES) ?>
+                    <?php elseif ($key === 'envelope_to'): ?>
+                      <?= htmlspecialchars($row['envelope_to'], ENT_QUOTES) ?>
                     <?php elseif ($key === 'auth_spf'): ?>
                       <?= htmlspecialchars($row['auth_spf_domain'], ENT_QUOTES) ?>
                       <?= badge($row['auth_spf_result']) ?>
@@ -269,14 +284,15 @@ function badge(string $value): string
       </section>
     <?php endif; ?>
 
-    <section class="card">
-      <h2>Raw XML</h2>
+    <section class="panel">
+      <div class="panel-head"><h2>Raw XML</h2></div>
       <pre class="raw"><?= htmlspecialchars($content ?: '', ENT_QUOTES) ?></pre>
     </section>
   </main>
 
   <?php renderFooter(); ?>
 
+  <script src="/js/sort-table.js" defer></script>
   <script src="/js/update-check.js" defer></script>
   <script src="/js/report.js" defer></script>
 </body>

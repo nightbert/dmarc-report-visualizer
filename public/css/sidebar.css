@@ -1,3 +1,5 @@
+/* The sidebar holds actions and process state — upload, mailbox, ingest status
+   — never data filters; those live in the filter bar above the content. */
 .sidebar {
   position: sticky;
   top: calc(var(--header-height) + 2rem);
@@ -6,35 +8,55 @@
   flex-direction: column;
   gap: var(--space-6);
   max-height: calc(100vh - var(--header-height) - 3.5rem);
-  /* When the combined cards (e.g. with the filter card expanded) exceed the
-     viewport, scroll the whole sidebar instead of clipping its cards. */
   overflow-y: auto;
+  border-left: 1px solid var(--border);
+  padding-left: var(--space-7);
+  /* Scrolling on one axis makes the other clip too, so leave room for the
+     focus ring of controls sitting flush against the right edge. */
+  padding-right: var(--space-2);
 }
 
-.sidebar > .card {
+.sidebar > .panel {
   display: flex;
   flex-direction: column;
-  /* Don't let cards shrink below their content; the sidebar scrolls instead. */
   flex-shrink: 0;
-  margin-bottom: 0;
+  padding: 0;
+  border-top: none;
+}
+
+.sidebar > .panel + .panel {
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-6);
+}
+
+.sidebar h2 {
+  font-size: 1rem;
+}
+
+.sidebar .panel-head {
+  margin-bottom: var(--space-4);
 }
 
 .mailbox-row {
   display: flex;
   align-items: center;
-  gap: var(--space-4);
-  flex-wrap: wrap;
-  margin-bottom: var(--space-1);
+  gap: var(--space-3);
+  margin-bottom: var(--space-5);
 }
 
 .mailbox-row button {
-  padding: 0.5rem 0.9rem;
-  border-radius: 8px;
-  border: none;
-  background: var(--btn-dark);
-  color: var(--on-accent);
-  font-size: 0.9rem;
+  flex: 0 0 auto;
+  white-space: nowrap;
+  padding: 0.35rem 0.7rem;
+  border-radius: 2px;
+  border: 1px solid var(--border);
+  background: var(--white);
+  font-size: 0.85rem;
   cursor: pointer;
+}
+
+.mailbox-row button:hover:not(:disabled) {
+  border-color: var(--hover-border);
 }
 
 .mailbox-row button:disabled {
@@ -43,32 +65,24 @@
 }
 
 .mailbox-last {
-  font-size: 0.82rem;
-}
-
-.status-header-row {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-4);
-  flex-wrap: wrap;
-  margin-bottom: var(--space-4);
+  align-items: baseline;
+  gap: var(--space-2);
+  white-space: nowrap;
 }
 
-.status-header-row h2 {
-  margin: 0;
+.mailbox-last-label {
+  font-size: 0.72rem;
+  color: var(--muted);
 }
 
-.status-filter {
-  padding: 0.35rem 0.6rem;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--bg-warm);
-  font-size: 0.85rem;
-  cursor: pointer;
+.mailbox-last-value {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.78rem;
 }
 
-.sidebar-divider {
-  margin: 1.25rem 0;
-  border-top: 1px solid var(--border);
+.mailbox-last.is-error .mailbox-last-value {
+  color: var(--danger-text);
 }
+

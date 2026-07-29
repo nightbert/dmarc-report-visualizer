@@ -1,18 +1,19 @@
 .site-footer {
   margin-top: auto;
-  padding: var(--space-6) var(--space-7);
+  padding: var(--space-6) 0;
   border-top: 1px solid var(--border);
-  background: var(--bg-warm);
 }
 
 .footer-content {
-  max-width: 100%;
+  width: 100%;
+  max-width: 1240px;
   margin: 0 auto;
+  padding: 0 var(--space-7);
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-3);
   align-items: center;
-  font-size: 0.9rem;
+  font-size: 0.82rem;
   color: var(--muted);
 }
 
@@ -22,5 +23,4 @@
 
 .update-link {
   color: var(--warn-link);
-  font-weight: 600;
 }

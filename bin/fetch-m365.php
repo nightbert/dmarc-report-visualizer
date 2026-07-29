@@ -76,6 +76,7 @@ while ($nextUrl !== '') {
 
     if (!is_array($messages) || empty($messages)) {
         if ($page === 0) {
+            updateStatus($statusFile, $statusName, 'done', 100, 'No new messages.');
             writeFetchState($stateFile, 'ok', 'No new messages.');
             exit(0);
         }

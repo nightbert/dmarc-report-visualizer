@@ -1,13 +1,14 @@
 .container {
   width: 100%;
+  max-width: 1240px;
   margin: 0 auto;
-  padding: var(--space-7);
+  padding: var(--space-7) var(--space-7) var(--space-7);
 }
 
 .layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
-  gap: var(--space-6);
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: var(--space-7);
 }
 
 .main {
@@ -16,9 +17,14 @@
   flex-direction: column;
 }
 
+/* Kept for the report detail view, which genuinely reads better as boxed
+   groups of key/value pairs than as one continuous column. */
 .card {
   padding: var(--space-6);
   margin-bottom: var(--space-6);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 2px;
 }
 
 .card h2 {
@@ -27,7 +33,7 @@
 
 .card-header {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   justify-content: space-between;
   gap: var(--space-4);
   flex-wrap: wrap;
@@ -50,5 +56,6 @@
 }
 
 .label {
-  font-size: 0.75rem;
+  font-size: 0.78rem;
 }
+

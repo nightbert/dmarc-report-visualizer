@@ -1,11 +1,9 @@
 .badge {
   display: inline-block;
-  padding: 0.15rem 0.45rem;
-  border-radius: 999px;
-  font-size: 0.8rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  font-weight: 600;
+  padding: 0.1rem 0.35rem;
+  border-radius: 2px;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
 }
 
 .badge.pass {
@@ -24,8 +22,9 @@
   background: var(--code-bg);
   color: var(--code-text);
   padding: var(--space-5);
-  border-radius: 8px;
-  font-size: 0.85rem;
+  border-radius: 2px;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
 }
 
 .multi-summary {
@@ -73,26 +72,18 @@
   align-items: center;
 }
 
-.breadcrumb {
-  margin-bottom: var(--space-5);
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-  flex-wrap: wrap;
-}
-
 .inline-form {
   display: inline-flex;
   margin: 0;
 }
 
 .btn-danger {
-  padding: 0.5rem 0.85rem;
-  border-radius: 8px;
+  padding: 0.35rem 0.7rem;
+  border-radius: 2px;
   border: 1px solid var(--danger-border);
   background: var(--danger-bg);
   color: var(--danger-text);
-  font-weight: 600;
+  font-size: 0.85rem;
   cursor: pointer;
 }
 

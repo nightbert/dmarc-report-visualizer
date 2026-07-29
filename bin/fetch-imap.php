@@ -65,6 +65,7 @@ try {
 
 if ($uids === []) {
     $imap->logout();
+    updateStatus($statusFile, $statusName, 'done', 100, 'No new messages.');
     writeFetchState($stateFile, 'ok', 'No new messages.');
     exit(0);
 }

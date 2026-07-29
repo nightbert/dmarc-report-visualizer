@@ -1,26 +1,87 @@
+/* Tables carry the weight of this app, so they are set as tables, not as boxes:
+   no outer frame, a rule under the header, hairlines between rows. */
 .reports {
   width: 100%;
   border-collapse: collapse;
-  overflow: hidden;
 }
 
 .reports th,
 .reports td {
-  padding: 0.85rem 0.75rem;
+  padding: 0.55rem 1.1rem;
   border-bottom: 1px solid var(--border);
   text-align: left;
-  font-size: 0.95rem;
+  font-size: 0.9rem;
   white-space: nowrap;
 }
 
 .reports th {
+  padding-top: 0;
+  font-weight: 500;
+  font-size: 0.78rem;
+  color: var(--muted);
+  border-bottom: 1px solid var(--rule-strong);
+}
+
+/* Flush the table with the column edges rather than the cell padding. */
+.reports td:first-child,
+.reports th:first-child {
+  padding-left: 0;
+}
+
+.reports td:last-child,
+.reports th:last-child {
+  padding-right: 0;
+}
+
+.reports tbody tr:hover td {
   background: var(--bg-warm);
-  font-weight: 600;
+}
+
+.reports th.is-sortable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.reports th.is-sortable:hover {
+  color: var(--text);
+}
+
+.reports th.is-sortable::after {
+  content: "\2195";
+  margin-left: 0.35rem;
+  font-size: 0.85em;
+  opacity: 0.3;
+}
+
+.reports th.is-sorted {
+  color: var(--text-strong);
+}
+
+.reports th.is-sorted::after {
+  content: "\2191";
+  opacity: 1;
+  color: var(--accent);
+}
+
+.reports th.is-sorted.is-sorted-desc::after {
+  content: "\2193";
+}
+
+.reports .num {
+  text-align: right;
+}
+
+.reports th.num {
+  text-align: right;
+}
+
+.reports .mono {
+  font-size: 0.85rem;
 }
 
 .reports .truncate {
   display: inline-block;
-  max-width: 22ch;
+  max-width: 12ch;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -31,45 +92,42 @@
   border-bottom: none;
 }
 
+.table-scroll {
+  overflow-x: auto;
+}
+
 .table-fill {
   flex: 1 1 auto;
-}
-
-.table-fill .reports {
-  border: none;
-  border-radius: 0;
-  background: transparent;
-}
-
-.empty {
-  padding: var(--space-7);
-  text-align: center;
 }
 
 .pagination {
   margin-top: var(--space-5);
   display: flex;
   justify-content: flex-end;
-  gap: var(--space-4);
+  gap: var(--space-5);
   align-items: center;
   flex-wrap: wrap;
 }
 
 .page-info {
   color: var(--muted);
-  font-size: 0.9rem;
+  font-size: 0.82rem;
 }
 
 .page-btn {
-  padding: 0.5rem 0.9rem;
-  border-radius: 8px;
+  padding: 0.35rem 0.7rem;
+  border-radius: 2px;
   border: 1px solid var(--border);
-  background: var(--bg-warm);
+  background: var(--white);
   cursor: pointer;
-  font-size: 0.9rem;
+  font-size: 0.85rem;
+}
+
+.page-btn:hover:not(:disabled) {
+  border-color: var(--hover-border);
 }
 
 .page-btn:disabled {
-  opacity: 0.5;
+  opacity: 0.45;
   cursor: not-allowed;
 }

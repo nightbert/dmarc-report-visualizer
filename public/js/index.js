@@ -22,14 +22,18 @@
     total: appInitial.total || 0,
     page: appInitial.page || 1,
     perPage: appInitial.perPage || 20,
+    sort: appInitial.sort || 'start',
+    dir: appInitial.dir === 'asc' ? 'asc' : 'desc',
   };
   const statusList = document.getElementById('status-list');
+  const statusOverall = document.getElementById('status-overall');
+  const statusOverallBar = document.getElementById('status-overall-bar');
+  const statusOverallCount = document.getElementById('status-overall-count');
   const statusFilter = document.getElementById('status-filter');
   let statusFilterMode = 'all';
   let latestStatusItems = [];
   const uploadForm = document.getElementById('upload-form');
   const fileInput = document.getElementById('file-input');
-  const statusReload = document.getElementById('status-reload');
   const fetchMailboxBtn = document.getElementById('fetch-mailbox');
   const mailboxLastFetch = document.getElementById('mailbox-last-fetch');
   const dropzone = document.getElementById('dropzone');
@@ -89,7 +93,32 @@
     return Number.isFinite(updatedAt) ? updatedAt : 0;
   }
 
+  const terminalStages = new Set(['done', 'error', 'ignored', 'duplicate']);
+
+  function updateOverallProgress(items) {
+    if (!statusOverall) {
+      return;
+    }
+    // Reflect the whole queue regardless of the active filter.
+    const queue = (items || []).filter((item) => !dismissedStatus.has(statusKey(item)));
+    if (queue.length === 0) {
+      statusOverall.hidden = true;
+      return;
+    }
+    statusOverall.hidden = false;
+    const finished = queue.filter((item) => terminalStages.has(String(item && item.stage ? item.stage : ''))).length;
+    const pct = Math.round((finished / queue.length) * 100);
+    if (statusOverallBar) {
+      statusOverallBar.style.width = `${pct}%`;
+      statusOverall.classList.toggle('is-complete', finished === queue.length);
+    }
+    if (statusOverallCount) {
+      statusOverallCount.textContent = `${finished} / ${queue.length} · ${pct}%`;
+    }
+  }
+
   function renderStatus(items) {
+    updateOverallProgress(items);
     if (!statusList) {
       return;
     }
@@ -144,10 +173,10 @@
       const animationClass = seenStatus.has(key) ? '' : ' status-item--new';
       return `
         <div class="${statusClass}${animationClass}" style="animation-delay:${index * 40}ms" data-status-key="${escapeHtml(key)}">
-          <button type="button" class="status-dismiss" aria-label="Dismiss item" title="Dismiss">×</button>
           <div class="status-header">
             <span class="status-name" title="${escapeHtml(name)}">${escapeHtml(name)}</span>
             <span class="status-stage">${escapeHtml(stage)} ${viewLink}</span>
+            <button type="button" class="status-dismiss" aria-label="Dismiss item" title="Dismiss">×</button>
           </div>
           <div class="progress">
             <div class="progress-bar" style="width:${progress}%"></div>
@@ -162,69 +191,127 @@
     });
   }
 
+  // Coarse "how long ago", so the label stays short enough to sit beside the
+  // fetch button in the sidebar. The exact time goes in the tooltip.
+  function relativeTime(ts) {
+    const seconds = Math.max(0, Math.floor(Date.now() / 1000 - ts));
+    if (seconds < 60) {
+      return 'just now';
+    }
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) {
+      return minutes + 'm ago';
+    }
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) {
+      return hours + 'h ago';
+    }
+    return Math.floor(hours / 24) + 'd ago';
+  }
+
+  function absoluteTime(ts) {
+    const date = new Date(ts * 1000);
+    const pad = (value) => String(value).padStart(2, '0');
+    return date.getFullYear() + '-' + pad(date.getMonth() + 1) + '-' + pad(date.getDate()) +
+      ' ' + pad(date.getHours()) + ':' + pad(date.getMinutes());
+  }
+
   function updateM365Info(info) {
     if (!mailboxLastFetch || !info) {
       return;
     }
-    const ts = Number(info.last_fetch_at || 0);
-    let text = 'Last fetch: never';
-    if (Number.isFinite(ts) && ts > 0) {
-      text = 'Last fetch: ' + new Date(ts * 1000).toLocaleString();
-      if (info.result === 'error') {
-        text += ' (error)';
-      }
+    const value = mailboxLastFetch.querySelector('.mailbox-last-value');
+    if (!value) {
+      return;
     }
-    mailboxLastFetch.textContent = text;
-    mailboxLastFetch.title = String(info.message || '');
+    const ts = Number(info.last_fetch_at || 0);
+    const known = Number.isFinite(ts) && ts > 0;
+
+    // Relative, because only a short value fits beside the fetch button in the
+    // sidebar's width — the exact time is a hover away.
+    value.textContent = known ? relativeTime(ts) : 'never';
+    // A failed fetch is marked by colour rather than an "(error)" suffix.
+    mailboxLastFetch.classList.toggle('is-error', info.result === 'error');
+
+    const tooltip = [];
+    if (known) {
+      tooltip.push(absoluteTime(ts));
+    }
+    if (info.message) {
+      tooltip.push(String(info.message));
+    }
+    mailboxLastFetch.title = tooltip.join(' — ');
   }
 
-  const filterYear = document.getElementById('filter-year');
-  const filterMonth = document.getElementById('filter-month');
+  const filterDomain = document.getElementById('filter-domain');
   const filterOrg = document.getElementById('filter-org');
-  const clearFilters = document.getElementById('clear-filters');
-  const filtersReady = filterYear && filterMonth && filterOrg;
+  const filtersReady = filterDomain && filterOrg;
+  const activeFilters = {
+    range: initialReportState.range || '30d',
+    org: initialReportState.org || '',
+    domain: initialReportState.domain || '',
+  };
   const pageSize = initialReportState.perPage || 20;
   let currentPage = initialReportState.page || 1;
   let currentTotal = initialReportState.total || 0;
+  let currentSort = initialReportState.sort;
+  let currentDir = initialReportState.dir;
   const pagePrev = document.getElementById('page-prev');
   const pageNext = document.getElementById('page-next');
   const pageInfo = document.getElementById('page-info');
 
-  async function deleteReport(token) {
-    if (!token) {
-      return false;
+  // The listing is paginated server-side, so sorting has to happen there too:
+  // reordering only the visible page would be misleading.
+  const reportsTable = document.getElementById('reports-table');
+
+  function markSortHeaders() {
+    if (!reportsTable || !reportsTable.tHead) {
+      return;
     }
-    const response = await fetch('/delete-report.php', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token }),
+    Array.from(reportsTable.tHead.rows[0].cells).forEach((th) => {
+      const key = th.dataset.sortKey;
+      if (!key) {
+        return;
+      }
+      const active = key === currentSort;
+      th.classList.toggle('is-sorted', active);
+      th.classList.toggle('is-sorted-desc', active && currentDir === 'desc');
+      th.setAttribute('aria-sort', active ? (currentDir === 'desc' ? 'descending' : 'ascending') : 'none');
     });
-    if (!response.ok) {
-      return false;
-    }
-    const data = await response.json();
-    return !!data.ok;
   }
 
-  function bindDeleteButtons() {
-    const buttons = document.querySelectorAll('.delete-report');
-    buttons.forEach((button) => {
-      button.addEventListener('click', async () => {
-        const token = button.dataset.token;
-        const row = button.closest('tr');
-        const confirmed = window.confirm('Delete this report?');
-        if (!confirmed) {
-          return;
-        }
-        button.disabled = true;
-        const ok = await deleteReport(token);
-        if (ok && row) {
-          loadPage();
-          return;
-        }
-        button.disabled = false;
-        window.alert('Delete failed.');
-      });
+  function sortBy(key, defaultDir) {
+    if (!key) {
+      return;
+    }
+    if (key === currentSort) {
+      currentDir = currentDir === 'asc' ? 'desc' : 'asc';
+    } else {
+      currentSort = key;
+      currentDir = defaultDir === 'desc' ? 'desc' : 'asc';
+    }
+    currentPage = 1;
+    markSortHeaders();
+    loadPage();
+  }
+
+  if (reportsTable && reportsTable.tHead) {
+    const head = reportsTable.tHead;
+    head.addEventListener('click', (event) => {
+      const th = event.target.closest('th');
+      if (th) {
+        sortBy(th.dataset.sortKey, th.dataset.sortDefault);
+      }
+    });
+    head.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') {
+        return;
+      }
+      const th = event.target.closest('th');
+      if (th && th.dataset.sortKey) {
+        event.preventDefault();
+        sortBy(th.dataset.sortKey, th.dataset.sortDefault);
+      }
     });
   }
 
@@ -274,18 +361,25 @@
 
     currentTotal = Number(data.total || 0);
     currentPage = Number(data.page || currentPage) || 1;
+    if (data.sort) {
+      currentSort = String(data.sort);
+      currentDir = data.dir === 'asc' ? 'asc' : 'desc';
+      markSortHeaders();
+    }
 
-    if (totalReports) {
-      totalReports.textContent = String(currentTotal);
+    // The masthead figure is the whole archive, not the filtered page — an
+    // ingest can change it, a filter cannot.
+    if (totalReports && data.total_all !== undefined) {
+      totalReports.textContent = Number(data.total_all).toLocaleString('en-US');
     }
 
     if (filtersReady) {
-      syncSelectOptions(filterYear, data.year_options || []);
-      syncSelectOptions(filterMonth, data.month_options || []);
+      syncSelectOptions(filterDomain, data.domain_options || [], { sortAlpha: true });
       syncSelectOptions(filterOrg, data.org_options || [], { sortAlpha: true });
     }
 
-    const tableBody = document.querySelector('.reports tbody');
+    // Scoped to the listing: the health panel above it holds tables too.
+    const tableBody = document.querySelector('#reports-table tbody');
     const summaries = Array.isArray(data.summaries) ? data.summaries : [];
     if (!tableBody) {
       // The page was rendered empty server-side; reload once reports exist.
@@ -296,8 +390,6 @@
     }
 
     tableBody.innerHTML = summaries.map((summary) => {
-      const year = String(summary && summary.year ? summary.year : '');
-      const month = String(summary && summary.month ? summary.month : '');
       const org = String(summary && summary.org ? summary.org : '');
       const token = String(summary && summary.token ? summary.token : '');
       const timestamp = Number(summary && summary.timestamp ? summary.timestamp : 0);
@@ -316,7 +408,7 @@
         : '<span class="muted">Unavailable</span>';
 
       return `
-        <tr data-year="${escapeHtml(year)}" data-month="${escapeHtml(month)}" data-org="${escapeHtml(org)}" data-token="${escapeHtml(token)}">
+        <tr>
           <td>${escapeHtml(startDate)}</td>
           <td>${escapeHtml(endDate)}</td>
           <td>${escapeHtml(org)}</td>
@@ -328,7 +420,6 @@
       `;
     }).join('');
 
-    bindDeleteButtons();
     updatePagination();
   }
 
@@ -365,17 +456,15 @@
   function currentFilterParams() {
     const params = new URLSearchParams();
     params.set('page', String(currentPage));
-    if (filtersReady) {
-      if (filterYear.value) {
-        params.set('year', filterYear.value);
-      }
-      if (filterMonth.value) {
-        params.set('month', filterMonth.value);
-      }
-      if (filterOrg.value) {
-        params.set('org', filterOrg.value);
-      }
+    params.set('range', activeFilters.range);
+    if (activeFilters.domain) {
+      params.set('domain', activeFilters.domain);
     }
+    if (activeFilters.org) {
+      params.set('org', activeFilters.org);
+    }
+    params.set('sort', currentSort);
+    params.set('dir', currentDir);
     params.set('t', String(Date.now()));
     return params;
   }
@@ -499,28 +588,29 @@
     });
   }
 
-  if (filtersReady) {
-    filterYear.addEventListener('change', () => {
-      currentPage = 1;
-      loadPage();
-    });
-    filterMonth.addEventListener('change', () => {
-      currentPage = 1;
-      loadPage();
-    });
-    filterOrg.addEventListener('change', () => {
-      currentPage = 1;
-      loadPage();
-    });
+  // Changing a filter reloads the whole page rather than just the listing: the
+  // health panels above it are rendered server-side, and refreshing only the
+  // table would leave their figures describing a range the user left.
+  function applyFilters() {
+    const params = new URLSearchParams();
+    params.set('range', activeFilters.range);
+    if (activeFilters.domain) {
+      params.set('domain', activeFilters.domain);
+    }
+    if (activeFilters.org) {
+      params.set('org', activeFilters.org);
+    }
+    window.location.href = '/?' + params.toString();
   }
 
-  if (clearFilters && filtersReady) {
-    clearFilters.addEventListener('click', () => {
-      filterYear.value = '';
-      filterMonth.value = '';
-      filterOrg.value = '';
-      currentPage = 1;
-      loadPage();
+  if (filtersReady) {
+    filterDomain.addEventListener('change', () => {
+      activeFilters.domain = filterDomain.value;
+      applyFilters();
+    });
+    filterOrg.addEventListener('change', () => {
+      activeFilters.org = filterOrg.value;
+      applyFilters();
     });
   }
 
@@ -528,13 +618,6 @@
     statusFilter.addEventListener('change', () => {
       statusFilterMode = statusFilter.value === 'errors' ? 'errors' : 'all';
       renderStatus(latestStatusItems);
-    });
-  }
-
-  if (statusReload) {
-    statusReload.addEventListener('click', async () => {
-      await clearCompletedStatus();
-      window.location.reload();
     });
   }
 
@@ -698,5 +781,4 @@
   });
   setInterval(refreshStatus, 3000);
   updatePagination();
-  bindDeleteButtons();
 })();

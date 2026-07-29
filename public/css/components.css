@@ -1,28 +1,76 @@
-.card,
-.stat-card,
-.reports,
-.table-fill,
-.empty {
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 12px;
+/* Panels are not cards: they sit directly on the page and are separated by a
+   hairline and space. Only things that genuinely float — the drag overlay, the
+   drilldown — get a border and a surface of their own. */
+.panel {
+  padding: var(--space-7) 0;
+  border-top: 1px solid var(--border);
 }
 
-.empty {
-  border-style: dashed;
+.panel:first-of-type {
+  border-top: none;
+  padding-top: 0;
 }
 
-.label,
-.filter-group label,
-.hero-stat-label,
-.stat-card span,
-.status-stage {
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+.panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-5);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-5);
+}
+
+.panel-head h2 {
+  margin: 0;
+}
+
+.panel-note {
+  font-size: 0.85rem;
   color: var(--muted);
 }
 
-.filter-summary::-webkit-details-marker,
+.section-note {
+  margin: 0 0 var(--space-6);
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.section-note:empty {
+  display: none;
+}
+
+/* The resolved window sits flush right, under the filter bar it belongs to. */
+.range-note {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-5);
+  flex-wrap: wrap;
+}
+
+.range-window {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.empty {
+  padding: var(--space-7);
+  border: 1px dashed var(--border);
+  border-radius: 2px;
+  text-align: center;
+  background: var(--bg-warm);
+}
+
+.empty h2 {
+  margin-top: 0;
+}
+
+.label {
+  color: var(--muted);
+}
+
 .multi-details summary::-webkit-details-marker {
   display: none;
 }
+

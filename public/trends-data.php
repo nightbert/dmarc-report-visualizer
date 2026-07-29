@@ -6,18 +6,22 @@ require __DIR__ . '/_lib.php';
 
 header('Content-Type: application/json; charset=UTF-8');
 
-$year = isset($_GET['year']) && is_string($_GET['year']) ? trim($_GET['year']) : '';
-$month = isset($_GET['month']) && is_string($_GET['month']) ? trim($_GET['month']) : '';
+$range = isset($_GET['range']) && is_string($_GET['range']) ? trim($_GET['range']) : '30d';
 $org = isset($_GET['org']) && is_string($_GET['org']) ? trim($_GET['org']) : '';
+$domain = isset($_GET['domain']) && is_string($_GET['domain']) ? trim($_GET['domain']) : '';
 
-$data = reportTrendsData($year, $month, $org);
+$data = reportTrendsData($range, $org, $domain);
 
 echo json_encode([
     'available' => (bool)($data['available'] ?? false),
+    'range' => $data['range'] ?? $range,
+    'range_label' => $data['range_label'] ?? '',
+    'window' => $data['window'] ?? [],
     'summary' => $data['summary'] ?? null,
+    'previous' => $data['previous'] ?? null,
+    'dispositions' => $data['dispositions'] ?? [],
     'timeseries' => $data['timeseries'] ?? [],
     'top_senders' => $data['top_senders'] ?? [],
-    'year_options' => $data['year_options'] ?? [],
-    'month_options' => $data['month_options'] ?? [],
     'org_options' => $data['org_options'] ?? [],
+    'domain_options' => $data['domain_options'] ?? [],
 ], JSON_UNESCAPED_SLASHES);

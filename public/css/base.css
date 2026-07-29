@@ -1,55 +1,65 @@
+/* The look is meant to read as an instrument rather than a dashboard template:
+   one flat paper surface, hairline rules instead of floating cards, a serif for
+   headings against a plain sans for text, and every figure set in tabular
+   monospace so columns of numbers line up and stay comparable. Colour is
+   reserved for meaning — pass, fail, and links — never for decoration. */
 :root {
   color-scheme: light;
 
-  --bg: #f6f3ee;
-  --bg-warm: #faf7f1;
-  --bg-glow: #fef5e7;
-  --white: #ffffff;
+  --bg: #f5f3ee;
+  --bg-warm: #faf8f4;
+  --bg-glow: #f5f3ee;
+  --white: #fffefb;
   --card: var(--white);
-  --glass: rgba(255, 255, 255, 0.7);
-  --text: #1f2430;
-  --text-strong: #1f2a35;
-  --muted: #6b7280;
-  --border: #e4e0d9;
-  --hover-border: #cfc7bb;
+  --glass: transparent;
+  --text: #1c1b19;
+  --text-strong: #101010;
+  --muted: #716d65;
+  --border: #ddd8ce;
+  --hover-border: #b9b2a5;
+  --rule-strong: #c3bcae;
 
-  --accent: #22577a;
-  --accent-rgb: 34, 87, 122;
+  --accent: #1f4e6b;
+  --accent-rgb: 31, 78, 107;
   --accent-teal: #3a7ca5;
-  --on-accent: var(--white);
+  --on-accent: #fffefb;
 
-  --btn-dark: #1f2937;
+  --btn-dark: #26251f;
 
-  --hero-grad-start: #fff4e0;
-  --dropzone-grad-start: #f3efe7;
+  --hero-grad-start: var(--bg);
+  --dropzone-grad-start: var(--bg-warm);
 
-  --info-bg: #f4f6f8;
-  --info-border: #d6dde6;
-  --success-bg: #e6f7ef;
-  --success-border: #b7e2cd;
-  --danger-bg: #fdecec;
-  --danger-border: #f5bcbc;
-  --danger-text: #991b1b;
-  --progress-track: #e6dfd6;
+  --info-bg: #f1f0ec;
+  --info-border: #ddd8ce;
+  --success-bg: #eaf2ea;
+  --success-border: #c3d9c5;
+  --danger-bg: #f9eae6;
+  --danger-border: #e6c2b6;
+  --danger-text: #8f3016;
+  --progress-track: #e5e0d6;
 
-  --pass-bg: #d1fae5;
-  --pass-text: #065f46;
-  --fail-bg: #fee2e2;
+  --pass-bg: #e7f0e7;
+  --pass-text: #245c39;
+  --fail-bg: #f9e8e3;
   --fail-text: var(--danger-text);
 
-  --code-bg: #111827;
-  --code-text: #f9fafb;
+  --code-bg: #22211d;
+  --code-text: #f2efe8;
 
-  --chart-pass: #2e7d52;
-  --chart-dkim: #3a86a8;
-  --chart-spf: #d99a2b;
-  --chart-fail: #c0492f;
-  --chart-mid: #b9821f;
-  --rate-track: #eeeeee;
+  --chart-pass: #3d6b4a;
+  --chart-dkim: #3c6d8a;
+  --chart-spf: #b5842c;
+  --chart-fail: #a8452a;
+  --chart-mid: #97731d;
+  --rate-track: #e5e0d6;
 
-  --overlay-rgb: 15, 23, 42;
+  --overlay-rgb: 28, 27, 25;
 
-  --warn-link: #b45309;
+  --warn-link: #97731d;
+
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+  --font-mono: ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
 
   --space-1: 0.25rem;
   --space-2: 0.4rem;
@@ -71,9 +81,25 @@ body {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
-  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.5;
   color: var(--text);
-  background: radial-gradient(circle at top left, var(--bg-glow), var(--bg));
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-serif);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text-strong);
+}
+
+h2 {
+  font-size: 1.2rem;
 }
 
 a {
@@ -83,6 +109,20 @@ a {
 
 a:hover {
   text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* Every figure in the app is set in tabular monospace, so that columns of
+   numbers align digit for digit and two values can be compared at a glance. */
+.num,
+.mono,
+.kpi-figure strong,
+.hero-stat strong,
+.rate-text,
+.delta,
+.page-info {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
 }
 
 .muted {
@@ -91,4 +131,17 @@ a:hover {
 
 .small {
   font-size: 0.85rem;
+}
+
+button,
+select,
+input {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }

@@ -6,7 +6,7 @@ require_once __DIR__ . '/../data_paths.php';
 require_once __DIR__ . '/../report_index.php';
 
 $APP_REPO_URL = 'https://github.com/nightbert/dmarc-report-visualizer';
-$APP_VERSION = 'v1.2.0';
+$APP_VERSION = 'v1.3.0';
 $APP_AUTHOR = 'nightbert';
 
 // Configured reports directory (env override or default).
@@ -51,11 +51,42 @@ function resolveReportsRoot(): string
     return $candidates[0] ?? '';
 }
 
-// One filtered, paginated page of report summaries (index or scan).
-function reportSummariesPage(int $page, int $perPage, ?string $year = null, ?string $month = null, ?string $org = null): array
+// Every stored report, ignoring the active filters. The masthead shows this on
+// each page, so the figure has to mean the same thing everywhere.
+function reportTotalCount(): int
+{
+    $root = resolveReportsRoot();
+    if ($root === '') {
+        return 0;
+    }
+
+    $db = reportIndexOpen($root);
+    if ($db !== null) {
+        try {
+            // A zero means the index exists but has not been synced yet — this
+            // is the one read path that never triggers a sync of its own, so
+            // fall through to the files, which are the source of truth anyway.
+            $count = reportIndexCount($db);
+            if ($count > 0) {
+                return $count;
+            }
+        } catch (Throwable $e) {
+            error_log('report count query failed, falling back to file scan: ' . $e->getMessage());
+        }
+    }
+
+    return count(listReportFiles($root));
+}
+
+// One filtered, paginated page of report summaries (index or scan). The listing
+// shares the range, domain and org filters with the rest of the dashboard, so
+// the whole page describes one slice of time.
+function reportSummariesPage(int $page, int $perPage, string $range = '30d', string $org = '', string $domain = '', string $sort = 'start', string $dir = 'desc'): array
 {
     $page = max(1, $page);
     $perPage = max(1, min(200, $perPage));
+    $sort = array_key_exists($sort, reportIndexSortColumns()) ? $sort : 'start';
+    $dir = strtolower($dir) === 'asc' ? 'asc' : 'desc';
     $root = resolveReportsRoot();
 
     $db = $root !== '' ? reportIndexOpen($root) : null;
@@ -64,7 +95,14 @@ function reportSummariesPage(int $page, int $perPage, ?string $year = null, ?str
 
             reportIndexSyncThrottled($db, $root, 'reportIndexParseFile', 60);
             $options = reportIndexFilterOptions($db);
-            $result = reportIndexQueryPage($db, $year, $month, $org, $perPage, ($page - 1) * $perPage);
+            $window = reportRangeWindow($db, $range);
+            $filters = [
+                'start_ts' => $window['start_ts'],
+                'end_ts' => $window['end_ts'],
+                'org' => $org,
+                'domain' => $domain,
+            ];
+            $result = reportIndexQueryPage($db, $filters, $perPage, ($page - 1) * $perPage, $sort, $dir);
 
             $rootPrefix = rtrim($root, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
             $summaries = [];
@@ -72,8 +110,6 @@ function reportSummariesPage(int $page, int $perPage, ?string $year = null, ?str
             foreach ($result['rows'] as $row) {
                 $summary = reportIndexRowToSummary($row, $rootPrefix);
                 $summary['token'] = buildFileToken($root, $summary['path']);
-                $summary['year'] = $summary['timestamp'] ? date('Y', $summary['timestamp']) : '';
-                $summary['month'] = $summary['timestamp'] ? date('m', $summary['timestamp']) : '';
                 if ($summary['token'] !== '') {
                     $tokenIndex[basename($summary['path'])] = $summary['token'];
                 }
@@ -84,11 +120,16 @@ function reportSummariesPage(int $page, int $perPage, ?string $year = null, ?str
                 'root' => $root,
                 'summaries' => $summaries,
                 'total' => (int)$result['total'],
+                'total_all' => reportIndexCount($db),
                 'page' => $page,
                 'per_page' => $perPage,
-                'year_options' => $options['years'],
-                'month_options' => $options['months'],
+                'sort' => $sort,
+                'dir' => $dir,
+                'range' => $window['range'],
+                'range_label' => reportRangeLabel($window['range']),
+                'window' => $window,
                 'org_options' => $options['orgs'],
+                'domain_options' => $options['domains'],
                 'token_index' => $tokenIndex,
             ];
         } catch (Throwable $e) {
@@ -96,7 +137,59 @@ function reportSummariesPage(int $page, int $perPage, ?string $year = null, ?str
         }
     }
 
-    return reportSummariesPageFromScan($root, $page, $perPage, $year, $month, $org);
+    return reportSummariesPageFromScan($root, $page, $perPage, $range, $org, $domain, $sort, $dir);
+}
+
+// Sort key of a summary for one of the sortable listing columns. Null means the
+// report has no value for it, which the ordering treats as empty — a numeric 0
+// is a value, exactly as in the SQL path, where only NULL and '' sort last.
+function reportSummarySortValue(array $summary, string $sort)
+{
+    switch ($sort) {
+        case 'end':
+            return ($summary['end_ts'] ?? null) !== null ? (int)$summary['end_ts'] : null;
+        case 'org':
+            return (string)($summary['org'] ?? '');
+        case 'domain':
+            return (string)($summary['domain'] ?? '');
+        case 'report_id':
+            return (string)($summary['report_id'] ?? '');
+        case 'records':
+            return (int)($summary['records'] ?? 0);
+        case 'start':
+        default:
+            // Mirrors COALESCE(begin_ts, sort_ts) in the index query.
+            return ($summary['begin_ts'] ?? null) !== null
+                ? (int)$summary['begin_ts']
+                : (int)($summary['timestamp'] ?? 0);
+    }
+}
+
+// Order summaries like the SQL index does: empty values last, newest first as
+// the tie-breaker.
+function sortReportSummaries(array $summaries, string $sort, string $dir): array
+{
+    $descending = strtolower($dir) !== 'asc';
+    usort($summaries, static function (array $a, array $b) use ($sort, $descending): int {
+        $left = reportSummarySortValue($a, $sort);
+        $right = reportSummarySortValue($b, $sort);
+        $leftEmpty = $left === null || $left === '';
+        $rightEmpty = $right === null || $right === '';
+        if ($leftEmpty || $rightEmpty) {
+            if ($leftEmpty && $rightEmpty) {
+                return ($b['timestamp'] ?? 0) <=> ($a['timestamp'] ?? 0);
+            }
+            return $leftEmpty ? 1 : -1;
+        }
+
+        $result = is_string($left) ? strcasecmp($left, (string)$right) : ($left <=> $right);
+        if ($result === 0) {
+            return ($b['timestamp'] ?? 0) <=> ($a['timestamp'] ?? 0);
+        }
+        return $descending ? -$result : $result;
+    });
+
+    return $summaries;
 }
 
 // Convert an index row into a report summary array.
@@ -122,47 +215,45 @@ function reportIndexRowToSummary(array $row, string $rootPrefix): array
     ];
 }
 
-// Build a summaries page by scanning the files (index fallback).
-function reportSummariesPageFromScan(string $root, int $page, int $perPage, ?string $year, ?string $month, ?string $org): array
+// Build a summaries page by scanning the files (index fallback). It has to
+// agree with the index path above, filter for filter — a mismatch only shows on
+// hosts without pdo_sqlite, where nothing would flag it.
+function reportSummariesPageFromScan(string $root, int $page, int $perPage, string $range, string $org, string $domain, string $sort = 'start', string $dir = 'desc'): array
 {
     $summaries = [];
-    $years = [];
-    $months = [];
     $orgs = [];
+    $domains = [];
+    $latest = 0;
 
     foreach (listReportFiles($root) as $file) {
         $summary = parseReportSummary($file);
         $summary['token'] = buildFileToken($root, $summary['path']);
-        $summary['year'] = $summary['timestamp'] ? date('Y', $summary['timestamp']) : '';
-        $summary['month'] = $summary['timestamp'] ? date('m', $summary['timestamp']) : '';
-        if ($summary['year'] !== '') {
-            $years[$summary['year']] = true;
-        }
-        if ($summary['month'] !== '') {
-            $months[$summary['month']] = true;
-        }
         if ($summary['org'] !== '') {
             $orgs[$summary['org']] = true;
         }
+        if ($summary['domain'] !== '') {
+            $domains[$summary['domain']] = true;
+        }
+        $latest = max($latest, (int)$summary['timestamp']);
         $summaries[] = $summary;
     }
 
-    $filtered = array_values(array_filter($summaries, static function (array $s) use ($year, $month, $org): bool {
-        if ($year !== null && $year !== '' && ($s['year'] ?? '') !== $year) {
+    $window = reportRangeWindowFromLatest($range, $latest);
+    $filtered = array_values(array_filter($summaries, static function (array $s) use ($window, $org, $domain): bool {
+        $ts = (int)($s['timestamp'] ?? 0);
+        if ($window['start_ts'] > 0 && ($ts < $window['start_ts'] || $ts > $window['end_ts'])) {
             return false;
         }
-        if ($month !== null && $month !== '' && ($s['month'] ?? '') !== $month) {
+        if ($org !== '' && ($s['org'] ?? '') !== $org) {
             return false;
         }
-        if ($org !== null && $org !== '' && ($s['org'] ?? '') !== $org) {
+        if ($domain !== '' && ($s['domain'] ?? '') !== $domain) {
             return false;
         }
         return true;
     }));
 
-    usort($filtered, static function (array $a, array $b): int {
-        return ($b['timestamp'] ?? 0) <=> ($a['timestamp'] ?? 0);
-    });
+    $filtered = sortReportSummaries($filtered, $sort, $dir);
 
     $total = count($filtered);
     $pageRows = array_slice($filtered, ($page - 1) * $perPage, $perPage);
@@ -173,12 +264,12 @@ function reportSummariesPageFromScan(string $root, int $page, int $perPage, ?str
         }
     }
 
-    $yearOptions = array_keys($years);
-    $monthOptions = array_keys($months);
     $orgOptions = array_keys($orgs);
-    sort($yearOptions);
-    sort($monthOptions);
+    $domainOptions = array_keys($domains);
     usort($orgOptions, static function (string $a, string $b): int {
+        return strcasecmp($a, $b);
+    });
+    usort($domainOptions, static function (string $a, string $b): int {
         return strcasecmp($a, $b);
     });
 
@@ -186,17 +277,23 @@ function reportSummariesPageFromScan(string $root, int $page, int $perPage, ?str
         'root' => $root,
         'summaries' => $pageRows,
         'total' => $total,
+        'total_all' => count($summaries),
         'page' => $page,
         'per_page' => $perPage,
-        'year_options' => $yearOptions,
-        'month_options' => $monthOptions,
+        'sort' => $sort,
+        'dir' => $dir,
+        'range' => $window['range'],
+        'range_label' => reportRangeLabel($window['range']),
+        'window' => $window,
         'org_options' => $orgOptions,
+        'domain_options' => $domainOptions,
         'token_index' => $tokenIndex,
     ];
 }
 
-// Aggregate trend data for the trends view, or unavailable.
-function reportTrendsData(?string $year = null, ?string $month = null, ?string $org = null, int $topLimit = 25): array
+// Aggregate trend data for the trends view, or unavailable. Every figure is
+// compared against the window immediately before the selected range.
+function reportTrendsData(string $range = '30d', string $org = '', string $domain = '', int $topLimit = 25): array
 {
     $root = resolveReportsRoot();
     $db = $root !== '' ? reportIndexOpen($root) : null;
@@ -207,15 +304,31 @@ function reportTrendsData(?string $year = null, ?string $month = null, ?string $
     try {
         reportIndexSyncThrottled($db, $root, 'reportIndexParseFile', 60);
         $options = reportIndexFilterOptions($db);
+        $window = reportRangeWindow($db, $range);
+        $filters = reportRecordFilters($window, $org, $domain);
+
+        // A window with no records is not a comparison, so drop the deltas
+        // rather than showing a change against nothing.
+        $previous = null;
+        if ($window['days'] > 0) {
+            $previous = reportTrendsSummary($db, reportRecordFilters($window, $org, $domain, '', true));
+            if ($previous['total'] === 0) {
+                $previous = null;
+            }
+        }
 
         return [
             'available' => true,
-            'summary' => reportTrendsSummary($db, $year, $month, $org),
-            'timeseries' => reportTrendsTimeseries($db, $year, $month, $org),
-            'top_senders' => reportTrendsTopSenders($db, $year, $month, $org, $topLimit),
-            'year_options' => $options['years'],
-            'month_options' => $options['months'],
+            'range' => $window['range'],
+            'range_label' => reportRangeLabel($window['range']),
+            'window' => $window,
+            'summary' => reportTrendsSummary($db, $filters),
+            'previous' => $previous,
+            'dispositions' => reportTrendsDispositions($db, $filters),
+            'timeseries' => reportTrendsTimeseries($db, $filters),
+            'top_senders' => reportTrendsTopSenders($db, $filters, $topLimit),
             'org_options' => $options['orgs'],
+            'domain_options' => $options['domains'],
         ];
     } catch (Throwable $e) {
         error_log('trends query failed: ' . $e->getMessage());
@@ -223,8 +336,83 @@ function reportTrendsData(?string $year = null, ?string $month = null, ?string $
     }
 }
 
+// Format a signed change for a delta chip ("+1.2", "-340", "0").
+function formatDelta(float $value, int $decimals = 0): string
+{
+    $rounded = round($value, $decimals);
+    $sign = $rounded > 0 ? '+' : ($rounded < 0 ? '-' : '');
+    return $sign . number_format(abs($rounded), $decimals);
+}
+
+// Whether a delta reads as an improvement, a regression or no change.
+function deltaClass(float $value, bool $riseIsGood): string
+{
+    if (round($value, 1) == 0.0) {
+        return 'is-flat';
+    }
+    return (($value > 0) === $riseIsGood) ? 'is-good' : 'is-bad';
+}
+
+// Colour class for a pass rate, matching the trends stat cards.
+function passRateClass(float $rate): string
+{
+    if ($rate >= 98.0) {
+        return 'is-good';
+    }
+    return $rate >= 90.0 ? 'is-mid' : 'is-warn';
+}
+
+// Dashboard health panel: window totals compared against the preceding window,
+// per-domain rows and the worst failing sources.
+function reportHealthData(string $range = '30d', string $org = '', string $domain = '', int $domainLimit = 10, int $sourceLimit = 8): array
+{
+    $root = resolveReportsRoot();
+    $db = $root !== '' ? reportIndexOpen($root) : null;
+    if ($db === null) {
+        return ['available' => false];
+    }
+
+    try {
+        $window = reportRangeWindow($db, $range);
+        if ($window['end_ts'] <= 0 && $window['days'] > 0) {
+            return ['available' => false];
+        }
+
+        $filters = reportRecordFilters($window, $org, $domain);
+        // "All time" resolves to an open window with no end, so the new-source
+        // count anchors at the newest indexed day instead — otherwise the tile
+        // would report zero on the one range that covers every source.
+        $newSourceEnd = $window['end_ts'] > 0 ? (int)$window['end_ts'] : reportRecordsLatestDay($db);
+        $newSourceDays = $window['days'] > 0 ? min(7, $window['days']) : 7;
+        $newSourceStart = $newSourceEnd > 0 ? $newSourceEnd - $newSourceDays * 86400 + 1 : 0;
+        $previous = $window['days'] > 0
+            ? reportHealthWindow($db, reportRecordFilters($window, $org, $domain, '', true))
+            : ['total' => 0, 'pass' => 0, 'fail' => 0, 'pass_rate' => 0.0, 'sources' => 0, 'domains' => 0, 'failing_sources' => 0];
+
+        return [
+            'available' => true,
+            'range' => $window['range'],
+            'range_label' => reportRangeLabel($window['range']),
+            'window' => $window,
+            'start_ts' => $window['start_ts'],
+            'end_ts' => $window['end_ts'],
+            'has_previous' => $previous['total'] > 0,
+            'current' => reportHealthWindow($db, $filters),
+            'previous' => $previous,
+            'new_source_days' => $newSourceDays,
+            'new_source_start_ts' => $newSourceStart,
+            'new_sources' => $newSourceStart > 0 ? reportHealthNewSourceCount($db, $filters, $newSourceStart, $newSourceEnd) : 0,
+            'domains' => reportHealthDomains($db, $filters, $domainLimit),
+            'failing_sources' => reportHealthFailingSources($db, $filters, $sourceLimit),
+        ];
+    } catch (Throwable $e) {
+        error_log('health query failed: ' . $e->getMessage());
+        return ['available' => false];
+    }
+}
+
 // Aggregate data for a single sender (source IP) drilldown.
-function reportSenderData(string $ip, ?string $year = null, ?string $month = null, ?string $org = null): array
+function reportSenderData(string $ip, string $range = '30d', string $org = '', string $domain = ''): array
 {
     $root = resolveReportsRoot();
     $db = $root !== '' ? reportIndexOpen($root) : null;
@@ -234,8 +422,10 @@ function reportSenderData(string $ip, ?string $year = null, ?string $month = nul
 
     try {
         reportIndexSyncThrottled($db, $root, 'reportIndexParseFile', 60);
+        $window = reportRangeWindow($db, $range);
+        $filters = reportRecordFilters($window, $org, $domain, $ip);
 
-        $reports = reportSenderReports($db, $ip, $year, $month, $org);
+        $reports = reportSenderReports($db, $filters);
         $rootPrefix = rtrim($root, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
         foreach ($reports as &$report) {
             $report['token'] = buildFileToken($root, $rootPrefix . $report['path']);
@@ -248,13 +438,52 @@ function reportSenderData(string $ip, ?string $year = null, ?string $month = nul
         return [
             'available' => true,
             'ip' => $ip,
-            'summary' => reportTrendsSummary($db, $year, $month, $org, $ip),
-            'timeseries' => reportTrendsTimeseries($db, $year, $month, $org, $ip),
-            'by_domain' => reportSenderByDomain($db, $ip, $year, $month, $org),
+            'range' => $window['range'],
+            'range_label' => reportRangeLabel($window['range']),
+            'summary' => reportTrendsSummary($db, $filters),
+            'timeseries' => reportTrendsTimeseries($db, $filters),
+            'by_domain' => reportSenderByDomain($db, $filters),
             'reports' => $reports,
         ];
     } catch (Throwable $e) {
         error_log('sender query failed: ' . $e->getMessage());
+        return ['available' => false];
+    }
+}
+
+// Reports behind one column of the alignment chart, or unavailable.
+function reportBucketData(string $bucket, string $alignment, string $range = '30d', string $org = '', string $domain = '', string $ip = ''): array
+{
+    if (!preg_match('/^\d{4}-\d{2}(-\d{2})?$/', $bucket)) {
+        return ['available' => false];
+    }
+
+    $root = resolveReportsRoot();
+    $db = $root !== '' ? reportIndexOpen($root) : null;
+    if ($db === null) {
+        return ['available' => false];
+    }
+
+    try {
+        $window = reportRangeWindow($db, $range);
+        $reports = reportBucketReports($db, $bucket, $alignment, reportRecordFilters($window, $org, $domain, $ip));
+        $rootPrefix = rtrim($root, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
+        $messages = 0;
+        foreach ($reports as &$report) {
+            $report['token'] = buildFileToken($root, $rootPrefix . $report['path']);
+            $messages += (int)$report['total'];
+        }
+        unset($report);
+
+        return [
+            'available' => true,
+            'bucket' => $bucket,
+            'alignment' => $alignment,
+            'messages' => $messages,
+            'reports' => $reports,
+        ];
+    } catch (Throwable $e) {
+        error_log('bucket query failed: ' . $e->getMessage());
         return ['available' => false];
     }
 }
@@ -599,19 +828,6 @@ function xmlValues(SimpleXMLElement $context, string $path): array
     }
 
     return $values;
-}
-
-// First non-empty value across several XPaths.
-function xmlFirstValue(SimpleXMLElement $context, array $paths): string
-{
-    foreach ($paths as $path) {
-        $value = xmlValue($context, $path);
-        if ($value !== '') {
-            return $value;
-        }
-    }
-
-    return '';
 }
 
 // Encode a report file path into an opaque URL token.

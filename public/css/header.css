@@ -2,62 +2,107 @@
   position: sticky;
   top: 0;
   z-index: 50;
-  padding: var(--space-7);
-  border-bottom: 1px solid var(--border);
-  background: linear-gradient(120deg, var(--hero-grad-start), var(--bg) 70%);
-  box-shadow: 0 2px 12px rgba(var(--accent-rgb), 0.08);
+  padding: var(--space-6) 0;
+  border-bottom: 1px solid var(--rule-strong);
+  background: var(--bg);
 }
 
 .hero-content {
-  max-width: 100%;
+  width: 100%;
+  max-width: 1240px;
   margin: 0 auto;
   padding: 0 var(--space-7);
   display: flex;
-  align-items: center;
-  gap: var(--space-5);
+  align-items: baseline;
+  gap: var(--space-6);
   flex-wrap: wrap;
 }
 
 .hero-text {
   display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
+  align-items: baseline;
+  gap: var(--space-4);
+  flex-wrap: wrap;
 }
 
 .hero h1 {
   margin: 0;
-  font-size: 1.75rem;
-  letter-spacing: -0.01em;
+  font-size: 1.4rem;
 }
 
 .hero-sub {
   margin: 0;
   color: var(--muted);
-  font-size: 0.92rem;
+  font-size: 0.85rem;
+}
+
+.hero-sub.mono {
+  font-family: var(--font-mono);
+}
+
+/* Second header row on the detail views: the page's own title and the record it
+   is showing, with the way back at the right end of the row. */
+.hero-secondary {
+  padding: var(--space-5) 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-warm);
+}
+
+.hero-secondary h1 {
+  font-size: 1.2rem;
+}
+
+/* Pushed to the right end of the sub-header, so it lands under the nav. */
+.hero-back {
+  margin-left: auto;
+  font-size: 0.85rem;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+/* Navigation as underlined text, not pills: the header should read as a
+   masthead, and the current page is marked by a rule under its name. */
+.hero-nav {
+  display: flex;
+  gap: var(--space-6);
+  margin-left: auto;
+}
+
+.hero-nav a {
+  font-size: 0.9rem;
+  color: var(--muted);
+  padding-bottom: 2px;
+  border-bottom: 2px solid transparent;
+}
+
+.hero-nav a:hover {
+  text-decoration: none;
+  color: var(--text);
+}
+
+.hero-nav a.is-active {
+  color: var(--text-strong);
+  border-bottom-color: var(--accent);
 }
 
 .hero-stat {
-  margin-left: auto;
   display: inline-flex;
   align-items: baseline;
   gap: var(--space-2);
-  padding: 0.55rem 1rem;
-  border-radius: 999px;
-  background: var(--glass);
-  border: 1px solid var(--border);
 }
 
 .hero-stat strong {
-  font-size: 1.25rem;
-  color: var(--accent);
+  font-size: 1rem;
+  color: var(--text-strong);
 }
 
 .hero-stat-label {
-  font-size: 0.7rem;
+  font-size: 0.8rem;
+  color: var(--muted);
 }
 
 @media (max-width: 720px) {
-  .hero-stat {
+  .hero-nav {
     margin-left: 0;
   }
 }
